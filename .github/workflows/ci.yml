@@ -47,12 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run unit tests
-        run: cargo test --lib --verbose
-      - name: Run integration tests
-        run: cargo test --test router_integration --test message_filtering --verbose
-      - name: Run doc tests
-        run: cargo test --doc --verbose
+      - name: Run all tests
+        run: cargo test --verbose
 
   bench:
     name: Benchmark

@@ -30,17 +30,18 @@ async fn test_allow_list_filtering() {
 
     let allowed_ids = vec![0u32]; // Only HEARTBEAT
     let test_cases = vec![
-        (0u32, true),   // HEARTBEAT - should pass
-        (1u32, false),  // SYS_STATUS - should block
-        (30u32, false), // ATTITUDE - should block
-        (33u32, false), // GLOBAL_POSITION_INT - should block
+        (0u32, true),    // HEARTBEAT - should pass
+        (1u32, false),   // SYS_STATUS - should block
+        (30u32, false),  // ATTITUDE - should block
+        (33u32, false),  // GLOBAL_POSITION_INT - should block
         (999u32, false), // Unknown - should block
     ];
 
     for (msg_id, should_pass) in test_cases {
         let passes = allowed_ids.contains(&msg_id);
         assert_eq!(
-            passes, should_pass,
+            passes,
+            should_pass,
             "Message ID {} should {}",
             msg_id,
             if should_pass { "pass" } else { "block" }
@@ -66,7 +67,8 @@ async fn test_block_list_filtering() {
     for (msg_id, should_pass) in test_cases {
         let passes = !blocked_ids.contains(&msg_id);
         assert_eq!(
-            passes, should_pass,
+            passes,
+            should_pass,
             "Message ID {} should {}",
             msg_id,
             if should_pass { "pass" } else { "block" }
@@ -111,7 +113,10 @@ async fn test_combined_allow_and_block() {
     let msg_id = 30u32;
     let should_pass = allowed.contains(&msg_id) && !blocked.contains(&msg_id);
 
-    assert!(!should_pass, "Blocked messages should not pass even if in allow list");
+    assert!(
+        !should_pass,
+        "Blocked messages should not pass even if in allow list"
+    );
 }
 
 /// Test filtering performance with large filter lists
@@ -145,12 +150,12 @@ async fn test_filter_performance() {
 async fn test_common_mavlink_message_filtering() {
     // Test filtering with common MAVLink message IDs
     let essential_messages = vec![
-        0u32,  // HEARTBEAT
-        1,     // SYS_STATUS
-        30,    // ATTITUDE
-        33,    // GLOBAL_POSITION_INT
-        74,    // VFR_HUD
-        147,   // BATTERY_STATUS
+        0u32, // HEARTBEAT
+        1,    // SYS_STATUS
+        30,   // ATTITUDE
+        33,   // GLOBAL_POSITION_INT
+        74,   // VFR_HUD
+        147,  // BATTERY_STATUS
     ];
 
     let high_frequency_messages = vec![

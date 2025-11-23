@@ -227,17 +227,11 @@ async fn test_message_bus_with_multiple_subscribers() {
     let mut sub3 = tx.subscribe();
 
     // Spawn subscriber tasks
-    let handle1 = tokio::spawn(async move {
-        sub1.recv().await
-    });
+    let handle1 = tokio::spawn(async move { sub1.recv().await });
 
-    let handle2 = tokio::spawn(async move {
-        sub2.recv().await
-    });
+    let handle2 = tokio::spawn(async move { sub2.recv().await });
 
-    let handle3 = tokio::spawn(async move {
-        sub3.recv().await
-    });
+    let handle3 = tokio::spawn(async move { sub3.recv().await });
 
     // Send a message
     let test_msg = "test_message".to_string();
