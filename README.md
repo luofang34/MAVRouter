@@ -1,4 +1,4 @@
-# mavrouter-rs
+# MAVRouter-rs
 
 A MAVLink router written in Rust. Designed for unattended embedded linux systems.
 
