@@ -7,8 +7,5 @@ Cargo.lock
 logs/
 *.tlog
 
-# Test scripts and configurations
-*.py
-*_test.toml
-*_filter_*.toml
+# Runtime test logs
 router_*.log

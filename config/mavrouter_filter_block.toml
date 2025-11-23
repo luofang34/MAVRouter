@@ -1,0 +1,15 @@
+[general]
+# tcp_port = 5760 
+log = "logs"
+log_telemetry = false
+
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyACM0"
+baud = 115200
+
+[[endpoint]]
+type = "tcp"
+address = "0.0.0.0:5760"
+mode = "server"
+block_msg_id_out = [0] # Block Heartbeat
