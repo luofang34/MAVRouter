@@ -1,6 +1,35 @@
 # Integration Tests
 
-This directory contains Python-based integration and stress tests for the MAVLink Router.
+This directory contains **Python-based end-to-end tests** for the MAVLink Router. These complement the Rust integration tests in `tests/*.rs`.
+
+## Testing Strategy: Hybrid Approach
+
+The project uses a **two-tier testing strategy**:
+
+### 🦀 Rust Tests (`tests/*.rs`)
+- **Purpose**: Unit and integration tests for internal logic
+- **Location**: `tests/router_integration.rs`, `tests/message_filtering.rs`
+- **Advantages**:
+  - No external dependencies (Python/pip)
+  - Fast compilation and execution
+  - Direct access to internal modules
+  - Type-safe, compile-time checks
+- **Run**: `cargo test`
+
+### 🐍 Python Tests (`tests/integration/*.py`)
+- **Purpose**: End-to-end "black box" tests from client perspective
+- **Location**: This directory
+- **Advantages**:
+  - Tests from external client viewpoint (like real GCS)
+  - Uses mature pymavlink library
+  - Simulates real-world MAVLink clients
+  - Chaos engineering and fuzzing scenarios
+- **Run**: See instructions below
+
+### Why Both?
+
+- **Rust tests**: Verify internal correctness, fast feedback during development
+- **Python tests**: Verify system behavior from user/client perspective, catch integration issues
 
 ## Prerequisites
 
