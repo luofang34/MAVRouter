@@ -1,0 +1,14 @@
+[general]
+tcp_port = 5760
+
+# Server listening on port 14550 (e.g., for GCS)
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+
+# Client sending to a local simulator or other service
+# [[endpoint]]
+# type = "udp"
+# address = "127.0.0.1:14551"
+# mode = "client"

@@ -1,0 +1,31 @@
+[package]
+name = "mavrouter-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Gemini Agent <agent@gemini.com>"]
+description = "A high-performance, async MAVLink router written in Rust"
+
+[dependencies]
+parking_lot = "0.12"
+tokio = { version = "1.36", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4.5", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+mavlink = "0.12"
+anyhow = "1.0"
+futures = "0.3"
+tokio-serial = "5.4"
+thiserror = "1.0"
+tokio-util = { version = "0.7", features = ["codec", "net"] }
+bytes = "1.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "warn"

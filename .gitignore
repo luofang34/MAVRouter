@@ -1,0 +1,14 @@
+/target
+Cargo.lock
+**/*.rs.bk
+
+# Runtime logs and telemetry
+*.log
+logs/
+*.tlog
+
+# Test scripts and configurations
+*.py
+*_test.toml
+*_filter_*.toml
+router_*.log
