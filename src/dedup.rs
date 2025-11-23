@@ -22,7 +22,7 @@ impl Dedup {
         }
 
         let now = Instant::now();
-        
+
         // Cleanup old entries
         while let Some((timestamp, hash)) = self.history.front() {
             if now.duration_since(*timestamp) > self.dedup_period {
@@ -38,7 +38,7 @@ impl Dedup {
         // We can use DefaultHasher.
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
         payload.hash(&mut hasher);
         let hash = hasher.finish();

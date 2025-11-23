@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 struct RouteEntry {
     endpoints: HashSet<usize>,
@@ -23,8 +23,9 @@ impl RoutingTable {
 
     pub fn update(&mut self, endpoint_id: usize, sysid: u8, compid: u8) {
         let now = Instant::now();
-        
-        self.routes.entry((sysid, compid))
+
+        self.routes
+            .entry((sysid, compid))
             .and_modify(|e| {
                 e.endpoints.insert(endpoint_id);
                 e.last_seen = now;
@@ -33,8 +34,9 @@ impl RoutingTable {
                 endpoints: HashSet::from([endpoint_id]),
                 last_seen: now,
             });
-            
-        self.sys_routes.entry(sysid)
+
+        self.sys_routes
+            .entry(sysid)
             .and_modify(|e| {
                 e.endpoints.insert(endpoint_id);
                 e.last_seen = now;
@@ -55,11 +57,11 @@ impl RoutingTable {
             if target_compid == 0 {
                 return entry.endpoints.contains(&endpoint_id);
             }
-            
+
             if let Some(comp_entry) = self.routes.get(&(target_sysid, target_compid)) {
                 return comp_entry.endpoints.contains(&endpoint_id);
             } else {
-                 return entry.endpoints.contains(&endpoint_id);
+                return entry.endpoints.contains(&endpoint_id);
             }
         }
 
@@ -69,8 +71,10 @@ impl RoutingTable {
     pub fn prune(&mut self, max_age: Duration) {
         let now = Instant::now();
         // Prune component routes
-        self.routes.retain(|_, v| now.duration_since(v.last_seen) < max_age);
+        self.routes
+            .retain(|_, v| now.duration_since(v.last_seen) < max_age);
         // Prune system routes
-        self.sys_routes.retain(|_, v| now.duration_since(v.last_seen) < max_age);
+        self.sys_routes
+            .retain(|_, v| now.duration_since(v.last_seen) < max_age);
     }
 }

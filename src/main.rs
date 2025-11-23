@@ -4,27 +4,27 @@
 mod config;
 mod router;
 mod endpoints {
-    pub mod udp;
-    pub mod tcp;
     pub mod serial;
+    pub mod tcp;
     pub mod tlog;
+    pub mod udp;
 }
 mod dedup;
-mod routing;
 mod filter;
 mod framing;
+mod routing;
 
-use anyhow::Result;
-use clap::Parser;
-use tracing::{info, error, warn};
 use crate::config::{Config, EndpointConfig};
+use crate::dedup::Dedup;
 use crate::router::create_bus;
 use crate::routing::RoutingTable;
-use crate::dedup::Dedup;
-use std::sync::Arc;
+use anyhow::Result;
+use clap::Parser;
 use parking_lot::{Mutex, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -40,9 +40,9 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
-    
+
     info!("Starting mavrouter-rs with config: {}", args.config);
-    
+
     let config = match Config::load(&args.config).await {
         Ok(c) => c,
         Err(e) => {
@@ -50,14 +50,17 @@ async fn main() -> Result<()> {
             return Err(e);
         }
     };
-    
-    info!("Loaded configuration with {} endpoints", config.endpoint.len());
+
+    info!(
+        "Loaded configuration with {} endpoints",
+        config.endpoint.len()
+    );
 
     let bus = create_bus(config.general.bus_capacity);
     let mut handles = vec![];
-    
+
     let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-    
+
     let dedup_period = config.general.dedup_period_ms.unwrap_or(0);
     let dedup = Arc::new(Mutex::new(Dedup::new(Duration::from_millis(dedup_period))));
 
@@ -83,7 +86,6 @@ async fn main() -> Result<()> {
         }
     }));
 
-
     // Implicit TCP Server
     if let Some(port) = config.general.tcp_port {
         let name = format!("Implicit TCP Server :{}", port);
@@ -92,25 +94,30 @@ async fn main() -> Result<()> {
         let rt = routing_table.clone();
         let dd = dedup.clone();
         let id = config.endpoint.len();
-        let filters = crate::filter::EndpointFilters::default(); 
+        let filters = crate::filter::EndpointFilters::default();
         let addr = format!("0.0.0.0:{}", port);
         let task_token = cancel_token.child_token();
-        
-        handles.push(tokio::spawn(supervise(name, task_token.clone(), move || {
-            let bus_tx = bus_tx.clone();
-            let bus_rx = bus_rx.resubscribe();
-            let rt = rt.clone();
-            let dd = dd.clone();
-            let filters = filters.clone();
-            let addr = addr.clone();
-            let m = crate::config::EndpointMode::Server;
-            let token = task_token.clone();
-            async move {
-                crate::endpoints::tcp::run(id, addr, m, bus_tx, bus_rx, rt, dd, filters, token).await
-            }
-        })));
+
+        handles.push(tokio::spawn(supervise(
+            name,
+            task_token.clone(),
+            move || {
+                let bus_tx = bus_tx.clone();
+                let bus_rx = bus_rx.resubscribe();
+                let rt = rt.clone();
+                let dd = dd.clone();
+                let filters = filters.clone();
+                let addr = addr.clone();
+                let m = crate::config::EndpointMode::Server;
+                let token = task_token.clone();
+                async move {
+                    crate::endpoints::tcp::run(id, addr, m, bus_tx, bus_rx, rt, dd, filters, token)
+                        .await
+                }
+            },
+        )));
     }
-    
+
     // Logging
     if let Some(log_dir) = &config.general.log {
         if config.general.log_telemetry {
@@ -118,15 +125,17 @@ async fn main() -> Result<()> {
             let bus_rx = bus.subscribe();
             let dir = log_dir.clone();
             let task_token = cancel_token.child_token();
-            
-            handles.push(tokio::spawn(supervise(name, task_token.clone(), move || {
-                let bus_rx = bus_rx.resubscribe();
-                let dir = dir.clone();
-                let token = task_token.clone();
-                async move {
-                    crate::endpoints::tlog::run(dir, bus_rx, token).await
-                }
-            })));
+
+            handles.push(tokio::spawn(supervise(
+                name,
+                task_token.clone(),
+                move || {
+                    let bus_rx = bus_rx.resubscribe();
+                    let dir = dir.clone();
+                    let token = task_token.clone();
+                    async move { crate::endpoints::tlog::run(dir, bus_rx, token).await }
+                },
+            )));
         }
     }
 
@@ -136,66 +145,95 @@ async fn main() -> Result<()> {
         let rt = routing_table.clone();
         let dd = dedup.clone();
         let task_token = cancel_token.child_token();
-        
+
         match endpoint_config {
-            EndpointConfig::Udp { address, mode, filters } => {
+            EndpointConfig::Udp {
+                address,
+                mode,
+                filters,
+            } => {
                 let name = format!("UDP Endpoint {} ({})", i, address);
                 let addr = address.clone();
                 let m = mode.clone();
                 let f = filters.clone();
-                                
-                handles.push(tokio::spawn(supervise(name, task_token.clone(), move || {
-                    let bus_tx = bus_tx.clone();
-                    let bus_rx = bus_rx.resubscribe();
-                    let rt = rt.clone();
-                    let dd = dd.clone();
-                    let f = f.clone();
-                    let addr = addr.clone();
-                    let m = m.clone();
-                    let token = task_token.clone();
-                    async move {
-                        crate::endpoints::udp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token).await
-                    }
-                })));
+
+                handles.push(tokio::spawn(supervise(
+                    name,
+                    task_token.clone(),
+                    move || {
+                        let bus_tx = bus_tx.clone();
+                        let bus_rx = bus_rx.resubscribe();
+                        let rt = rt.clone();
+                        let dd = dd.clone();
+                        let f = f.clone();
+                        let addr = addr.clone();
+                        let m = m.clone();
+                        let token = task_token.clone();
+                        async move {
+                            crate::endpoints::udp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token)
+                                .await
+                        }
+                    },
+                )));
             }
-            EndpointConfig::Tcp { address, mode, filters } => {
+            EndpointConfig::Tcp {
+                address,
+                mode,
+                filters,
+            } => {
                 let name = format!("TCP Endpoint {} ({})", i, address);
                 let addr = address.clone();
                 let m = mode.clone();
                 let f = filters.clone();
-                
-                handles.push(tokio::spawn(supervise(name, task_token.clone(), move || {
-                    let bus_tx = bus_tx.clone();
-                    let bus_rx = bus_rx.resubscribe();
-                    let rt = rt.clone();
-                    let dd = dd.clone();
-                    let f = f.clone();
-                    let addr = addr.clone();
-                    let m = m.clone();
-                    let token = task_token.clone();
-                    async move {
-                        crate::endpoints::tcp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token).await
-                    }
-                })));
+
+                handles.push(tokio::spawn(supervise(
+                    name,
+                    task_token.clone(),
+                    move || {
+                        let bus_tx = bus_tx.clone();
+                        let bus_rx = bus_rx.resubscribe();
+                        let rt = rt.clone();
+                        let dd = dd.clone();
+                        let f = f.clone();
+                        let addr = addr.clone();
+                        let m = m.clone();
+                        let token = task_token.clone();
+                        async move {
+                            crate::endpoints::tcp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token)
+                                .await
+                        }
+                    },
+                )));
             }
-            EndpointConfig::Serial { device, baud, filters } => {
+            EndpointConfig::Serial {
+                device,
+                baud,
+                filters,
+            } => {
                 let name = format!("Serial Endpoint {} ({})", i, device);
                 let dev = device.clone();
                 let b = *baud;
                 let f = filters.clone();
-                
-                handles.push(tokio::spawn(supervise(name, task_token.clone(), move || {
-                    let bus_tx = bus_tx.clone();
-                    let bus_rx = bus_rx.resubscribe();
-                    let rt = rt.clone();
-                    let dd = dd.clone();
-                    let f = f.clone();
-                    let dev = dev.clone();
-                    let token = task_token.clone();
-                    async move {
-                        crate::endpoints::serial::run(i, dev, b, bus_tx, bus_rx, rt, dd, f, token).await
-                    }
-                })));
+
+                handles.push(tokio::spawn(supervise(
+                    name,
+                    task_token.clone(),
+                    move || {
+                        let bus_tx = bus_tx.clone();
+                        let bus_rx = bus_rx.resubscribe();
+                        let rt = rt.clone();
+                        let dd = dd.clone();
+                        let f = f.clone();
+                        let dev = dev.clone();
+                        let token = task_token.clone();
+                        async move {
+                            crate::endpoints::serial::run(
+                                i, dev, b, bus_tx, bus_rx, rt, dd, f, token,
+                            )
+                            .await
+                        }
+                    },
+                )));
             }
         }
     }

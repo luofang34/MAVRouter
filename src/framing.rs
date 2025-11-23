@@ -1,5 +1,5 @@
+use bytes::{Buf, BytesMut};
 use mavlink::{MavHeader, MavlinkVersion};
-use bytes::{BytesMut, Buf};
 use std::io::Cursor;
 use tracing::warn;
 
@@ -63,7 +63,7 @@ impl StreamParser {
 
             // Try V2
             let res_v2 = mavlink::read_v2_msg::<mavlink::common::MavMessage, _>(&mut cursor);
-            
+
             match res_v2 {
                 Ok((header, message)) => {
                     let len = cursor.position() as usize;
@@ -77,8 +77,9 @@ impl StreamParser {
                 Err(e) => {
                     // Try V1
                     cursor.set_position(start_pos);
-                    let res_v1 = mavlink::read_v1_msg::<mavlink::common::MavMessage, _>(&mut cursor);
-                    
+                    let res_v1 =
+                        mavlink::read_v1_msg::<mavlink::common::MavMessage, _>(&mut cursor);
+
                     match res_v1 {
                         Ok((header, message)) => {
                             let len = cursor.position() as usize;
@@ -108,7 +109,7 @@ fn is_eof(e: &mavlink::error::MessageReadError) -> bool {
     match e {
         mavlink::error::MessageReadError::Io(io_err) => {
             io_err.kind() == std::io::ErrorKind::UnexpectedEof
-        },
+        }
         _ => false,
     }
 }
@@ -125,17 +126,20 @@ mod tests {
         let mut parser = StreamParser::new();
         let header = MavHeader::default();
         let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
-        
+
         let mut buf = Vec::new();
         mavlink::write_v2_msg(&mut buf, header, &msg).expect("Failed to write test message");
-        
+
         let split_idx = buf.len() / 2;
         parser.push(&buf[..split_idx]);
         assert!(parser.next().is_none());
-        
+
         parser.push(&buf[split_idx..]);
         let res = parser.next();
         assert!(res.is_some());
-        assert_eq!(res.expect("Should have parsed packet").message.message_id(), 0);
+        assert_eq!(
+            res.expect("Should have parsed packet").message.message_id(),
+            0
+        );
     }
 }
