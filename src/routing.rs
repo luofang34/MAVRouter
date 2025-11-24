@@ -183,7 +183,6 @@ impl RoutingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num_cpus;
     use std::time::Duration;
 
     fn stress_iterations() -> usize {
@@ -309,7 +308,7 @@ mod tests {
         // Simulate updates with churn
         for i in 0..iterations {
             // Endpoint ID 1-100 rotating
-            let endpoint = (i % 100) as usize;
+            let endpoint = i % 100;
             // System ID 1-250 rotating
             let sys = ((i % 250) + 1) as u8;
             // Component ID 1-250 rotating

@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, black_box};
-use mavrouter_rs::router::{RoutedMessage, create_bus};
+use mavrouter_rs::router::RoutedMessage;
 use mavlink::common::MavMessage;
 use mavlink::MavHeader;
 use mavlink::MavlinkVersion;

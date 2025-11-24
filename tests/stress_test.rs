@@ -4,11 +4,11 @@
 
 use mavrouter_rs::dedup::Dedup;
 use mavrouter_rs::routing::RoutingTable;
-use num_cpus;
 use std::env;
 use std::time::Duration;
 
 // Helper to determine stress test iterations based on environment
+#[allow(clippy::expect_used)]
 fn stress_iterations() -> usize {
     // Environment variable override
     if let Ok(s) = env::var("CI_STRESS_ITERATIONS") {
@@ -48,7 +48,7 @@ fn test_routing_table_stress_functional() {
     for i in 0..iterations {
         let sys = ((i % 100) + 1) as u8;
         let comp = ((i % 10) + 1) as u8;
-        let endpoint = (i % 10) as usize;
+        let endpoint = i % 10;
         let result = rt.should_send(endpoint, sys, comp);
 
         // Verify basic functional correctness (route should exist)
