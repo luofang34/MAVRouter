@@ -40,6 +40,7 @@ pub struct RoutingStats {
 }
 
 impl RoutingTable {
+    #[allow(dead_code)] // Allow dead code for the entire impl block
     /// Creates a new, empty `RoutingTable`.
     pub fn new() -> Self {
         Self {
