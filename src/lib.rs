@@ -15,7 +15,7 @@
 //! use mavrouter_rs::{config::Config, router};
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let config = Config::from_file("mavrouter.toml").await?;
+//! let config = Config::load("mavrouter.toml").await?;
 //! let bus = router::create_bus(1000);
 //! // Start endpoints...
 //! # Ok(())
