@@ -5,19 +5,19 @@
 //! serial MAVLink devices. It supports automatic reconnection if the
 //! serial port connection is lost.
 
-use anyhow::{Result, Context};
-use tokio_serial::SerialPortBuilderExt;
-use tokio::sync::broadcast;
-use tracing::{info, warn, error};
-use crate::router::RoutedMessage;
-use std::sync::Arc;
-use parking_lot::{Mutex, RwLock};
-use crate::routing::RoutingTable;
 use crate::dedup::Dedup;
+use crate::endpoint_core::{run_stream_loop, EndpointCore};
 use crate::filter::EndpointFilters;
-use crate::endpoint_core::{EndpointCore, run_stream_loop};
+use crate::router::RoutedMessage;
+use crate::routing::RoutingTable;
+use anyhow::{Context, Result};
+use parking_lot::{Mutex, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast;
+use tokio_serial::SerialPortBuilderExt;
 use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 /// Runs the serial endpoint logic, continuously attempting to open and
 /// communicate over the specified serial device.
@@ -61,7 +61,6 @@ pub async fn run(
     filters: EndpointFilters,
     token: CancellationToken,
 ) -> Result<()> {
-    
     let core = EndpointCore {
         id,
         bus_tx: bus_tx.clone(),
@@ -71,7 +70,15 @@ pub async fn run(
     };
 
     loop {
-        match open_and_run(&device, baud, bus_rx.resubscribe(), core.clone(), token.clone()).await {
+        match open_and_run(
+            &device,
+            baud,
+            bus_rx.resubscribe(),
+            core.clone(),
+            token.clone(),
+        )
+        .await
+        {
             Ok(_) => {
                 if token.is_cancelled() {
                     info!("Serial port {} loop stopped (cancelled).", device);
@@ -86,9 +93,11 @@ pub async fn run(
                 error!("Serial port {} error: {:#}. Retrying in 1s...", device, e);
             }
         }
-        
-        if token.is_cancelled() { break; }
-        
+
+        if token.is_cancelled() {
+            break;
+        }
+
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(1)) => {},
             _ = token.cancelled() => { break; }
@@ -131,11 +140,19 @@ async fn open_and_run(
         .with_context(|| format!("Failed to open serial port {}", device))?;
 
     #[cfg(unix)]
-    port.set_exclusive(false).ok(); 
+    port.set_exclusive(false).ok();
 
     info!("Serial endpoint opened at {} baud", baud);
-    
+
     let (read_stream, write_stream) = tokio::io::split(port);
 
-    run_stream_loop(read_stream, write_stream, bus_rx, core, token, device.to_string()).await
+    run_stream_loop(
+        read_stream,
+        write_stream,
+        bus_rx,
+        core,
+        token,
+        device.to_string(),
+    )
+    .await
 }

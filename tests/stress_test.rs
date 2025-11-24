@@ -2,8 +2,8 @@
 
 //! Stress and reliability tests
 
-use mavrouter_rs::routing::RoutingTable;
 use mavrouter_rs::dedup::Dedup;
+use mavrouter_rs::routing::RoutingTable;
 use std::time::Duration;
 
 #[test]
@@ -26,9 +26,13 @@ fn test_routing_table_stress_functional() {
         let comp = ((i % 10) + 1) as u8;
         let endpoint = (i % 10) as usize;
         let result = rt.should_send(endpoint, sys, comp);
-        
+
         // Verify basic functional correctness (route should exist)
-        assert!(result, "Route should exist for endpoint {} sys {} comp {}", endpoint, sys, comp);
+        assert!(
+            result,
+            "Route should exist for endpoint {} sys {} comp {}",
+            endpoint, sys, comp
+        );
     }
 }
 
@@ -56,8 +60,8 @@ fn test_dedup_memory_actually_bounded() {
 
 #[tokio::test]
 async fn test_routing_table_concurrent_access() {
-    use std::sync::Arc;
     use parking_lot::RwLock;
+    use std::sync::Arc;
 
     let rt = Arc::new(RwLock::new(RoutingTable::new()));
 

@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 /// Represents an entry in the routing table for a specific (system_id, component_id) pair
 /// or just a system_id. It tracks which endpoints have seen this MAVLink entity.
@@ -62,8 +62,9 @@ impl RoutingTable {
     /// * `compid` - The MAVLink component ID of the message sender.
     pub fn update(&mut self, endpoint_id: usize, sysid: u8, compid: u8) {
         let now = Instant::now();
-        
-        self.routes.entry((sysid, compid))
+
+        self.routes
+            .entry((sysid, compid))
             .and_modify(|e| {
                 e.endpoints.insert(endpoint_id);
                 e.last_seen = now;
@@ -72,8 +73,9 @@ impl RoutingTable {
                 endpoints: HashSet::from([endpoint_id]),
                 last_seen: now,
             });
-            
-        self.sys_routes.entry(sysid)
+
+        self.sys_routes
+            .entry(sysid)
             .and_modify(|e| {
                 e.endpoints.insert(endpoint_id);
                 e.last_seen = now;
@@ -111,12 +113,14 @@ impl RoutingTable {
     ///
     /// `true` if the message should be sent to `endpoint_id`, `false` otherwise.
     pub fn should_send(&self, endpoint_id: usize, target_sysid: u8, target_compid: u8) -> bool {
-        if target_sysid == 0 { // MAV_BROADCAST_SYSTEM_ID
+        if target_sysid == 0 {
+            // MAV_BROADCAST_SYSTEM_ID
             return true;
         }
 
         if let Some(entry) = self.sys_routes.get(&target_sysid) {
-            if target_compid == 0 { // MAV_BROADCAST_COMPONENT_ID or target system only
+            if target_compid == 0 {
+                // MAV_BROADCAST_COMPONENT_ID or target system only
                 return entry.endpoints.contains(&endpoint_id);
             }
 
@@ -145,8 +149,10 @@ impl RoutingTable {
     /// * `max_age` - The maximum duration an entry can remain in the table without being updated.
     pub fn prune(&mut self, max_age: Duration) {
         let now = Instant::now();
-        self.routes.retain(|_, v| now.duration_since(v.last_seen) < max_age);
-        self.sys_routes.retain(|_, v| now.duration_since(v.last_seen) < max_age);
+        self.routes
+            .retain(|_, v| now.duration_since(v.last_seen) < max_age);
+        self.sys_routes
+            .retain(|_, v| now.duration_since(v.last_seen) < max_age);
     }
 
     #[allow(dead_code)]
@@ -155,7 +161,9 @@ impl RoutingTable {
         RoutingStats {
             total_systems: self.sys_routes.len(),
             total_routes: self.routes.len(),
-            total_endpoints: self.sys_routes.values()
+            total_endpoints: self
+                .sys_routes
+                .values()
                 .flat_map(|e| e.endpoints.iter())
                 .collect::<HashSet<_>>()
                 .len(),
@@ -176,7 +184,7 @@ mod tests {
         assert!(rt.should_send(1, 100, 0));
         assert!(rt.should_send(1, 100, 1));
         // Unknown component on known system -> Fallback (True)
-        assert!(rt.should_send(1, 100, 2)); 
+        assert!(rt.should_send(1, 100, 2));
         assert!(!rt.should_send(2, 100, 0));
     }
 
@@ -198,17 +206,29 @@ mod tests {
         // Yes, because `routes.get` succeeds.
         assert!(rt.should_send(1, 100, 1));
         // Does Endpoint 2 receive (100, 1)?
-        // `routes.get(100, 1)` exists -> {1}. 
+        // `routes.get(100, 1)` exists -> {1}.
         // `comp_entry.endpoints.contains(2)` -> False.
-        assert!(!rt.should_send(2, 100, 1), "Strict routing for known component");
+        assert!(
+            !rt.should_send(2, 100, 1),
+            "Strict routing for known component"
+        );
 
         assert!(rt.should_send(2, 100, 2));
-        assert!(!rt.should_send(1, 100, 2), "Strict routing for known component");
+        assert!(
+            !rt.should_send(1, 100, 2),
+            "Strict routing for known component"
+        );
 
         // Unknown component (100, 3) on known system: FALLBACK
         // Both endpoints know system 100.
-        assert!(rt.should_send(1, 100, 3), "New component, fallback to sys route");
-        assert!(rt.should_send(2, 100, 3), "New component, fallback to sys route");
+        assert!(
+            rt.should_send(1, 100, 3),
+            "New component, fallback to sys route"
+        );
+        assert!(
+            rt.should_send(2, 100, 3),
+            "New component, fallback to sys route"
+        );
     }
 
     #[test]

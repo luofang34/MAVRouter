@@ -1,9 +1,9 @@
 //! Simple MAVRouter example
-//! 
+//!
 //! This example creates a router with:
 //! - UDP server on port 14550 (for GCS)
 //! - TCP server on port 5760 (for companion computer)
-//! 
+//!
 //! Run with: cargo run --example simple_router
 
 use mavrouter_rs::*;
@@ -18,12 +18,10 @@ async fn main() -> anyhow::Result<()> {
     let bus = router::create_bus(1000);
 
     // Create routing table and deduplication
-    let routing_table = std::sync::Arc::new(
-        parking_lot::RwLock::new(routing::RoutingTable::new())
-    );
-    let dedup = std::sync::Arc::new(
-        parking_lot::Mutex::new(dedup::Dedup::new(Duration::from_millis(100)))
-    );
+    let routing_table = std::sync::Arc::new(parking_lot::RwLock::new(routing::RoutingTable::new()));
+    let dedup = std::sync::Arc::new(parking_lot::Mutex::new(dedup::Dedup::new(
+        Duration::from_millis(100),
+    )));
 
     let token = tokio_util::sync::CancellationToken::new();
 
@@ -33,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
     let rt = routing_table.clone();
     let dd = dedup.clone();
     let t = token.clone();
-    
+
     tokio::spawn(async move {
         endpoints::udp::run(
             1,
@@ -45,7 +43,8 @@ async fn main() -> anyhow::Result<()> {
             dd,
             filter::EndpointFilters::default(),
             t,
-        ).await
+        )
+        .await
     });
 
     tracing::info!("Router started");

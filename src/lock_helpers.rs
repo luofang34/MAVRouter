@@ -1,5 +1,5 @@
 //! Safe lock helpers that handle poisoning gracefully
-//! 
+//!
 //! parking_lot locks never poison, but we keep these wrappers
 //! for consistency and potential future migration to std locks.
 

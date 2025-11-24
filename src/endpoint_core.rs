@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn, trace};
+use tracing::{debug, error, trace, warn};
 
 /// Represents the shared core logic and resources for a MAVLink endpoint.
 ///
@@ -50,8 +50,12 @@ impl EndpointCore {
     pub fn handle_incoming_frame(&self, frame: MavlinkFrame) {
         let mut temp_buf = Vec::new();
         if let Err(e) = match frame.version {
-            MavlinkVersion::V2 => mavlink::write_v2_msg(&mut temp_buf, frame.header, &frame.message),
-            MavlinkVersion::V1 => mavlink::write_v1_msg(&mut temp_buf, frame.header, &frame.message),
+            MavlinkVersion::V2 => {
+                mavlink::write_v2_msg(&mut temp_buf, frame.header, &frame.message)
+            }
+            MavlinkVersion::V1 => {
+                mavlink::write_v1_msg(&mut temp_buf, frame.header, &frame.message)
+            }
         } {
             warn!("Inbound Serialize Error: {}", e);
             return;
@@ -62,7 +66,11 @@ impl EndpointCore {
             dd.is_duplicate(&temp_buf)
         };
 
-        if !is_dup && self.filters.check_incoming(&frame.header, frame.message.message_id()) {
+        if !is_dup
+            && self
+                .filters
+                .check_incoming(&frame.header, frame.message.message_id())
+        {
             {
                 let mut rt = lock_write!(self.routing_table);
                 rt.update(self.id, frame.header.system_id, frame.header.component_id);
@@ -99,7 +107,10 @@ impl EndpointCore {
             return false;
         }
 
-        if !self.filters.check_outgoing(&msg.header, msg.message.message_id()) {
+        if !self
+            .filters
+            .check_outgoing(&msg.header, msg.message.message_id())
+        {
             return false;
         }
 
@@ -107,7 +118,8 @@ impl EndpointCore {
         let rt = lock_read!(self.routing_table);
         let should_send = rt.should_send(self.id, target.system_id, target.component_id);
 
-        if !should_send && target.system_id != 0 { // Don't log dropped broadcast as "no route"
+        if !should_send && target.system_id != 0 {
+            // Don't log dropped broadcast as "no route"
             trace!(
                 endpoint_id = self.id,
                 target_sys = target.system_id,
@@ -164,12 +176,12 @@ where
 {
     let core_read = core.clone();
     let name_read = name.clone();
-    
+
     // Clone CancellationToken for each independent async block/select branch
     let cancel_token_for_reader_loop = cancel_token.clone();
     let cancel_token_for_writer_loop = cancel_token.clone();
     let cancel_token_for_final_select = cancel_token.clone();
-    
+
     let reader_loop = async move {
         let mut parser = StreamParser::new();
         let mut buf = [0u8; 4096];

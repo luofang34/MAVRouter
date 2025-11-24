@@ -8,19 +8,19 @@
 //! In **client mode**, it attempts to connect to a remote TCP server and
 //! automatically retries connection if lost.
 
-use anyhow::{Result, Context};
+use crate::dedup::Dedup;
+use crate::endpoint_core::{run_stream_loop, EndpointCore};
+use crate::filter::EndpointFilters;
+use crate::router::RoutedMessage;
+use crate::routing::RoutingTable;
+use anyhow::{Context, Result};
+use parking_lot::{Mutex, RwLock};
+use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
-use tracing::{error, info, warn};
-use crate::router::RoutedMessage;
-use std::sync::Arc;
-use parking_lot::{Mutex, RwLock};
-use crate::routing::RoutingTable;
-use crate::dedup::Dedup;
-use crate::filter::EndpointFilters;
-use crate::endpoint_core::{EndpointCore, run_stream_loop};
 use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 
 /// Runs the TCP endpoint logic, continuously handling connections based on the specified mode.
 ///
@@ -63,7 +63,6 @@ pub async fn run(
     filters: EndpointFilters,
     token: CancellationToken,
 ) -> Result<()> {
-    
     let core = EndpointCore {
         id,
         bus_tx: bus_tx.clone(),
@@ -74,10 +73,11 @@ pub async fn run(
 
     match mode {
         crate::config::EndpointMode::Server => {
-            let listener = TcpListener::bind(&address).await
+            let listener = TcpListener::bind(&address)
+                .await
                 .with_context(|| format!("Failed to bind TCP listener to {}", address))?;
             info!("TCP Server listening on {}", address);
-            
+
             let mut join_set = JoinSet::new();
 
             loop {
@@ -89,7 +89,7 @@ pub async fn run(
                                 let core_client = core.clone();
                                 let rx_client = bus_rx.resubscribe();
                                 let token_client = token.clone();
-                                
+
                                 join_set.spawn(async move {
                                     let (read, write) = tokio::io::split(stream);
                                     let name = format!("TCP Client {}", addr);
@@ -108,21 +108,31 @@ pub async fn run(
         crate::config::EndpointMode::Client => {
             info!("Connecting to TCP server at {}", address);
             loop {
-                if token.is_cancelled() { break; }
-                
+                if token.is_cancelled() {
+                    break;
+                }
+
                 match TcpStream::connect(&address).await {
                     Ok(stream) => {
                         info!("Connected to {}", address);
                         let (read, write) = tokio::io::split(stream);
                         let name = format!("TCP Client {}", address);
-                        let _ = run_stream_loop(read, write, bus_rx.resubscribe(), core.clone(), token.clone(), name).await;
+                        let _ = run_stream_loop(
+                            read,
+                            write,
+                            bus_rx.resubscribe(),
+                            core.clone(),
+                            token.clone(),
+                            name,
+                        )
+                        .await;
                         warn!("Connection to {} lost, retrying in 1s...", address);
                     }
                     Err(e) => {
                         error!("Failed to connect to {}: {}. Retrying in 5s...", address, e);
                     }
                 }
-                
+
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {},
                     _ = token.cancelled() => break,

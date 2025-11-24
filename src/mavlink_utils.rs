@@ -1,5 +1,5 @@
 //! MAVLink protocol utilities for target extraction and routing
-//! 
+//!
 //! This module provides utilities to extract target system/component IDs
 //! from MAVLink messages for intelligent routing decisions.
 
@@ -71,7 +71,7 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
         MISSION_ACK(m) => (m.target_system, m.target_component),
         MISSION_CLEAR_ALL(m) => (m.target_system, m.target_component),
         MISSION_ITEM_REACHED(_) => (0, 0), // Broadcast
-        MISSION_CURRENT(_) => (0, 0), // Broadcast
+        MISSION_CURRENT(_) => (0, 0),      // Broadcast
         MISSION_SET_CURRENT(m) => (m.target_system, m.target_component),
 
         // Parameter messages
@@ -109,7 +109,10 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
         _ => (0, 0),
     };
 
-    MessageTarget { system_id, component_id }
+    MessageTarget {
+        system_id,
+        component_id,
+    }
 }
 
 #[cfg(test)]

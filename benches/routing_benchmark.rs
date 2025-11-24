@@ -1,9 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use mavrouter_rs::routing::RoutingTable;
-use mavrouter_rs::mavlink_utils::extract_target;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use mavlink::common::MavMessage;
 use mavlink::common::*;
-use std::time::Duration;
-use mavlink::common::MavMessage; // Explicit import
+use mavrouter_rs::mavlink_utils::extract_target;
+use mavrouter_rs::routing::RoutingTable;
+use std::time::Duration; // Explicit import
 
 fn benchmark_routing_table_lookup(c: &mut Criterion) {
     let mut rt = RoutingTable::new();
@@ -16,21 +16,15 @@ fn benchmark_routing_table_lookup(c: &mut Criterion) {
     }
 
     c.bench_function("routing_lookup_hit", |b| {
-        b.iter(|| {
-            black_box(rt.should_send(1, 5, 3))
-        })
+        b.iter(|| black_box(rt.should_send(1, 5, 3)))
     });
 
     c.bench_function("routing_lookup_miss", |b| {
-        b.iter(|| {
-            black_box(rt.should_send(1, 99, 1))
-        })
+        b.iter(|| black_box(rt.should_send(1, 99, 1)))
     });
 
     c.bench_function("routing_lookup_broadcast", |b| {
-        b.iter(|| {
-            black_box(rt.should_send(1, 0, 0))
-        })
+        b.iter(|| black_box(rt.should_send(1, 0, 0)))
     });
 }
 
@@ -51,16 +45,12 @@ fn benchmark_target_extraction(c: &mut Criterion) {
     let msg = MavMessage::COMMAND_LONG(cmd);
 
     c.bench_function("extract_target_command", |b| {
-        b.iter(|| {
-            black_box(extract_target(&msg))
-        })
+        b.iter(|| black_box(extract_target(&msg)))
     });
 
     let hb = MavMessage::HEARTBEAT(HEARTBEAT_DATA::default());
     c.bench_function("extract_target_broadcast", |b| {
-        b.iter(|| {
-            black_box(extract_target(&hb))
-        })
+        b.iter(|| black_box(extract_target(&hb)))
     });
 }
 

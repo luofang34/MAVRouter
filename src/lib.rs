@@ -35,34 +35,34 @@
 
 #![deny(unsafe_code)]
 #![deny(clippy::unwrap_used)]
-#![deny(missing_docs)]  // Enforce 100% documentation coverage
+#![deny(missing_docs)] // Enforce 100% documentation coverage
 
 /// Router configuration and parsing utilities.
 pub mod config;
-/// Core message routing logic and types.
-pub mod router;
 /// Core logic for generic endpoint operations.
 pub mod endpoint_core;
+/// Core message routing logic and types.
+pub mod router;
 /// Various MAVLink endpoint implementations (TCP, UDP, Serial, TLOG).
 pub mod endpoints {
-    /// UDP endpoint specific implementation.
-    pub mod udp;
-    /// TCP endpoint specific implementation.
-    pub mod tcp;
     /// Serial endpoint specific implementation.
     pub mod serial;
+    /// TCP endpoint specific implementation.
+    pub mod tcp;
     /// TLOG (Telemetry Log) endpoint for message recording.
     pub mod tlog;
+    /// UDP endpoint specific implementation.
+    pub mod udp;
 }
 /// Message deduplication logic.
 pub mod dedup;
-/// Routing table implementation for MAVLink messages.
-pub mod routing;
 /// Message filtering capabilities for endpoints.
 pub mod filter;
-/// Utility functions for MAVLink message processing.
-pub mod mavlink_utils;
-/// Helper macros for locking parking_lot mutexes and rwlocks.
-pub mod lock_helpers;
 /// MAVLink message framing and parsing from byte streams.
 pub mod framing;
+/// Helper macros for locking parking_lot mutexes and rwlocks.
+pub mod lock_helpers;
+/// Utility functions for MAVLink message processing.
+pub mod mavlink_utils;
+/// Routing table implementation for MAVLink messages.
+pub mod routing;
