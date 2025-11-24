@@ -62,5 +62,7 @@ pub mod filter;
 pub mod mavlink_utils;
 /// MAVLink message framing and parsing from byte streams.
 pub mod framing;
+/// Statistics history tracking and aggregation.
+pub mod stats;
 /// Routing table implementation for MAVLink messages.
 pub mod routing;
