@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Represents an entry in the routing table for a specific (system_id, component_id) pair
 /// or just a system_id. It tracks which endpoints have seen this MAVLink entity.
@@ -29,7 +29,6 @@ impl Default for RoutingTable {
 
 /// Statistics about the current state of the routing table.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct RoutingStats {
     /// Total number of unique MAVLink systems currently known.
     pub total_systems: usize,
@@ -37,6 +36,8 @@ pub struct RoutingStats {
     pub total_routes: usize,
     /// Total number of unique endpoint IDs represented in the routing table.
     pub total_endpoints: usize,
+    /// Timestamp when these statistics were gathered (seconds since UNIX EPOCH).
+    pub timestamp: u64,
 }
 
 impl RoutingTable {
@@ -166,6 +167,10 @@ impl RoutingTable {
                 .flat_map(|e| e.endpoints.iter())
                 .collect::<HashSet<_>>()
                 .len(),
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
         }
     }
 }

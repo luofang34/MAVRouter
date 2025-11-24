@@ -68,6 +68,17 @@ pub struct GeneralConfig {
     /// Interval at which the routing table is pruned, in seconds.
     #[serde(default = "default_routing_table_prune_interval_secs")]
     pub routing_table_prune_interval_secs: u64,
+    /// Stats history retention period in seconds.
+    /// Default 86400 seconds (24 hours). Set to 0 to disable stats.
+    /// Note: Memory usage ≈ retention_secs * 24 bytes.
+    #[serde(default = "default_stats_retention_secs")]
+    pub stats_retention_secs: u64,
+    /// Stats sampling interval in seconds. Default 1 second.
+    #[serde(default = "default_stats_sample_interval_secs")]
+    pub stats_sample_interval_secs: u64,
+    /// Stats log output interval in seconds. Default 60 seconds.
+    #[serde(default = "default_stats_log_interval_secs")]
+    pub stats_log_interval_secs: u64,
 }
 
 fn default_bus_capacity() -> usize {
@@ -77,6 +88,15 @@ fn default_routing_table_ttl_secs() -> u64 {
     300
 }
 fn default_routing_table_prune_interval_secs() -> u64 {
+    60
+}
+fn default_stats_retention_secs() -> u64 {
+    86400
+}
+fn default_stats_sample_interval_secs() -> u64 {
+    1
+}
+fn default_stats_log_interval_secs() -> u64 {
     60
 }
 

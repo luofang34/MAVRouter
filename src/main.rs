@@ -20,14 +20,92 @@ mod routing;
 use crate::config::{Config, EndpointConfig};
 use crate::dedup::Dedup;
 use crate::router::create_bus;
-use crate::routing::RoutingTable;
+use crate::routing::{RoutingStats, RoutingTable};
 use anyhow::Result;
 use clap::Parser;
 use parking_lot::{Mutex, RwLock};
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+
+/// Simple Stats buffer history
+struct StatsHistory {
+    samples: VecDeque<RoutingStats>, // Recent N seconds samples
+    max_age_secs: u64,               // Max retention time
+}
+
+impl StatsHistory {
+    fn new(max_age_secs: u64) -> Self {
+        let capacity = max_age_secs as usize;
+        Self {
+            samples: VecDeque::with_capacity(capacity),
+            max_age_secs,
+        }
+    }
+
+    /// Add sample and clean up old data
+    fn push(&mut self, stats: RoutingStats) {
+        self.samples.push_back(stats);
+
+        if let Some(latest) = self.samples.back() {
+            // Clean up old data exceeding max_age
+            let cutoff = latest.timestamp.saturating_sub(self.max_age_secs);
+            while let Some(oldest) = self.samples.front() {
+                if oldest.timestamp < cutoff {
+                    self.samples.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Calculate aggregated statistics for a specified time window
+    fn aggregate(&self, window_secs: u64) -> Option<AggregatedStats> {
+        if self.samples.is_empty() {
+            return None;
+        }
+
+        let latest = self.samples.back()?;
+        let cutoff = latest.timestamp.saturating_sub(window_secs);
+
+        // In a real ring buffer we could optimize this, but iteration is fine for small N
+        // or even 86400 items (linear scan is fast in memory).
+        // Optimization: Find start index using binary search or reverse iterator if needed.
+        // For <100k items, iter is usually fine.
+        let window: Vec<_> = self
+            .samples
+            .iter()
+            .filter(|s| s.timestamp >= cutoff)
+            .collect();
+
+        if window.is_empty() {
+            return None;
+        }
+
+        let sum_routes: usize = window.iter().map(|s| s.total_routes).sum();
+        let avg_routes = sum_routes as f64 / window.len() as f64;
+
+        Some(AggregatedStats {
+            avg_routes,
+            max_routes: window.iter().map(|s| s.total_routes).max()?,
+            min_routes: window.iter().map(|s| s.total_routes).min()?,
+            sample_count: window.len(),
+        })
+    }
+}
+
+/// Simplified aggregated stats
+#[derive(Debug)]
+struct AggregatedStats {
+    avg_routes: f64,
+    max_routes: usize,
+    #[allow(dead_code)]
+    min_routes: usize,
+    sample_count: usize,
+}
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -89,27 +167,78 @@ async fn main() -> Result<()> {
         }
     }));
 
-    // Stats Reporting Task (runs every 10s)
+    // Stats Reporting Task
     let rt_stats = routing_table.clone();
     let stats_token = cancel_token.child_token();
-    handles.push(tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = stats_token.cancelled() => {
-                    info!("Stats Reporter shutting down.");
-                    break;
-                }
-                _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                    let rt = lock_read!(rt_stats);
-                    let stats = rt.stats();
-                    info!(
-                        "Stats - Routes: {}, Systems: {}, Endpoints: {}",
-                        stats.total_routes, stats.total_systems, stats.total_endpoints
-                    );
+
+    let sample_interval = config.general.stats_sample_interval_secs;
+    let retention = config.general.stats_retention_secs;
+    let log_interval = config.general.stats_log_interval_secs;
+
+    if sample_interval > 0 && retention > 0 {
+        handles.push(tokio::spawn(async move {
+            let mut history = StatsHistory::new(retention);
+            let mut last_log_time = 0u64;
+
+            loop {
+                tokio::select! {
+                    _ = stats_token.cancelled() => {
+                        info!("Stats Reporter shutting down.");
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(sample_interval)) => {
+                        let rt = lock_read!(rt_stats);
+                        let mut stats = rt.stats();
+                        drop(rt); // Release lock quickly
+
+                        // Add timestamp if not already set by routing (it is set now, but ensure consistency)
+                        // routing.rs stats() sets it, so we can use it directly or overwrite to be sure of sampling time.
+                        // Let's overwrite to capture "sample time" rather than "lock time" if slightly different,
+                        // though routing.rs uses SystemTime::now() too.
+                        stats.timestamp = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+
+                        history.push(stats.clone()); // Clone is cheap (3 usizes + u64)
+
+                        // Periodic logging
+                        if stats.timestamp.saturating_sub(last_log_time) >= log_interval {
+                            // 1 minute aggregation
+                            if let Some(min1) = history.aggregate(60) {
+                                info!(
+                                    "Stats [1min] avg={:.1} routes, max={}",
+                                    min1.avg_routes, min1.max_routes
+                                );
+                            }
+
+                            // 1 hour aggregation
+                            if let Some(hour1) = history.aggregate(3600) {
+                                info!(
+                                    "Stats [1hr] avg={:.1} routes, max={}",
+                                    hour1.avg_routes, hour1.max_routes
+                                );
+                            }
+
+                            // Full retention aggregation
+                            if let Some(all) = history.aggregate(retention) {
+                                info!(
+                                    "Stats [{}h] avg={:.1} routes, samples={}, systems={}, endpoints={}",
+                                    retention / 3600, 
+                                    all.avg_routes, 
+                                    all.sample_count,
+                                    stats.total_systems,
+                                    stats.total_endpoints
+                                );
+                            }
+
+                            last_log_time = stats.timestamp;
+                        }
+                    }
                 }
             }
-        }
-    }));
+        }));
+    }
 
     // Implicit TCP Server
     if let Some(port) = config.general.tcp_port {

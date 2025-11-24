@@ -48,6 +48,11 @@ log_telemetry = true
 bus_capacity = 1000
 routing_table_ttl_secs = 300
 
+# Statistics Configuration
+stats_retention_secs = 86400      # Keep stats for 24 hours
+stats_sample_interval_secs = 1    # Sample every 1 second
+stats_log_interval_secs = 60      # Log aggregated stats every 60 seconds
+
 [[endpoint]]
 type = "serial"
 device = "/dev/ttyACM0"
