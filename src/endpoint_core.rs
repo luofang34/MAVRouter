@@ -11,7 +11,6 @@ use crate::framing::{MavlinkFrame, StreamParser};
 use crate::mavlink_utils::extract_target;
 use crate::router::RoutedMessage;
 use crate::routing::RoutingTable;
-use crate::{lock_mutex, lock_read, lock_write}; // Import macros
 use anyhow::Result;
 use mavlink::{MavlinkVersion, Message};
 use parking_lot::{Mutex, RwLock};
@@ -62,7 +61,7 @@ impl EndpointCore {
         }
 
         let is_dup = {
-            let mut dd = lock_mutex!(self.dedup);
+            let mut dd = self.dedup.lock();
             dd.is_duplicate(&temp_buf)
         };
 
@@ -72,7 +71,7 @@ impl EndpointCore {
                 .check_incoming(&frame.header, frame.message.message_id())
         {
             {
-                let mut rt = lock_write!(self.routing_table);
+                let mut rt = self.routing_table.write();
                 rt.update(self.id, frame.header.system_id, frame.header.component_id);
             }
             if let Err(e) = self.bus_tx.send(RoutedMessage {
@@ -115,7 +114,7 @@ impl EndpointCore {
         }
 
         let target = extract_target(&msg.message);
-        let rt = lock_read!(self.routing_table);
+        let rt = self.routing_table.read();
         let should_send = rt.should_send(self.id, target.system_id, target.component_id);
 
         if !should_send && target.system_id != 0 {

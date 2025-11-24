@@ -13,7 +13,6 @@ mod endpoints {
 mod dedup;
 mod filter;
 mod framing;
-pub mod lock_helpers;
 mod mavlink_utils;
 mod routing;
 
@@ -171,7 +170,7 @@ async fn run_stats_server(
                             let command = String::from_utf8_lossy(&buf[..n]).trim().to_string();
                             let response = match command.as_str() {
                                 "stats" => {
-                                    let rt_guard = lock_read!(rt);
+                                    let rt_guard = rt.read();
                                     let stats = rt_guard.stats();
                                     format!(
                                         r#"{{"total_systems":{},"total_routes":{},"total_endpoints":{},"timestamp":{}}}"#,
@@ -251,7 +250,7 @@ async fn main() -> Result<()> {
                     break;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(prune_interval)) => {
-                    let mut rt = lock_write!(rt_prune);
+                    let mut rt = rt_prune.write();
                     rt.prune(Duration::from_secs(prune_ttl));
                 }
             }
@@ -277,11 +276,10 @@ async fn main() -> Result<()> {
                         info!("Stats Reporter shutting down.");
                         break;
                     }
-                    _ = tokio::time::sleep(Duration::from_secs(sample_interval)) => {
-                        let rt = lock_read!(rt_stats);
-                        let mut stats = rt.stats();
-                        drop(rt); // Release lock quickly
-
+                                    _ = tokio::time::sleep(Duration::from_secs(sample_interval)) => {
+                                        let rt = rt_stats.read();
+                                        let mut stats = rt.stats();
+                                        drop(rt); // Release lock quickly
                         // Ensure timestamp reflects sample time, even if already set in routing.rs
                         stats.timestamp = SystemTime::now()
                             .duration_since(UNIX_EPOCH)

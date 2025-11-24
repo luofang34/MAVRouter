@@ -58,11 +58,9 @@ pub mod endpoints {
 pub mod dedup;
 /// Message filtering capabilities for endpoints.
 pub mod filter;
-/// MAVLink message framing and parsing from byte streams.
-pub mod framing;
-/// Helper macros for locking parking_lot mutexes and rwlocks.
-pub mod lock_helpers;
 /// Utility functions for MAVLink message processing.
 pub mod mavlink_utils;
+/// MAVLink message framing and parsing from byte streams.
+pub mod framing;
 /// Routing table implementation for MAVLink messages.
 pub mod routing;

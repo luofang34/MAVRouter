@@ -12,7 +12,6 @@ use crate::dedup::Dedup;
 use crate::endpoint_core::EndpointCore;
 use crate::filter::EndpointFilters;
 use crate::framing::MavlinkFrame;
-use crate::lock_mutex;
 use crate::router::RoutedMessage;
 use crate::routing::RoutingTable;
 use anyhow::{Context, Result};
@@ -110,7 +109,7 @@ pub async fn run(
             match r_socket.recv_from(&mut buf).await {
                 Ok((len, addr)) => {
                     {
-                        let mut guard = lock_mutex!(clients_recv);
+                        let mut guard = clients_recv.lock();
                         guard.insert(addr, Instant::now());
                     }
 
@@ -172,7 +171,7 @@ pub async fn run(
                         }
                     } else {
                         let targets: Vec<SocketAddr> = {
-                            let guard = lock_mutex!(clients_send);
+                            let guard = clients_send.lock();
                             guard.keys().cloned().collect()
                         };
                         for client in targets {
@@ -198,7 +197,7 @@ pub async fn run(
             interval.tick().await;
             let now = Instant::now();
             let ttl = Duration::from_secs(300);
-            let mut guard = lock_mutex!(clients_cleanup);
+            let mut guard = clients_cleanup.lock();
             let initial_len = guard.len();
             guard.retain(|_, last_seen| now.duration_since(*last_seen) < ttl);
             let dropped = initial_len - guard.len();
