@@ -13,4 +13,5 @@ pub mod endpoints {
 pub mod dedup;
 pub mod routing;
 pub mod filter;
+pub mod mavlink_utils;
 pub mod framing;

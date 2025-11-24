@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use mavrouter_rs::router::{create_bus, RoutedMessage};
 use mavrouter_rs::routing::RoutingTable;
 use mavrouter_rs::dedup::Dedup;

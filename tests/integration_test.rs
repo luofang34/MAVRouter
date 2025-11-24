@@ -1,5 +1,7 @@
+#![allow(clippy::unwrap_used)]
+
 use mavrouter_rs::config::EndpointMode;
-use mavrouter_rs::router::{create_bus, RoutedMessage};
+use mavrouter_rs::router::create_bus;
 use mavrouter_rs::routing::RoutingTable;
 use mavrouter_rs::dedup::Dedup;
 use mavrouter_rs::filter::EndpointFilters;
@@ -10,7 +12,7 @@ use std::time::Duration;
 use tokio::net::{UdpSocket, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
-use mavlink::{MavHeader, MavlinkVersion};
+use mavlink::MavHeader;
 use serial_test::serial;
 
 #[tokio::test]

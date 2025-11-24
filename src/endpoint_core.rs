@@ -1,6 +1,7 @@
 use crate::dedup::Dedup;
 use crate::filter::EndpointFilters;
 use crate::framing::{MavlinkFrame, StreamParser};
+use crate::mavlink_utils::extract_target; // Will be added in Phase 2.3
 use crate::router::RoutedMessage;
 use crate::routing::RoutingTable;
 use anyhow::Result;
@@ -56,11 +57,31 @@ impl EndpointCore {
         }
     }
 
+    /// Check if a message should be sent out on this endpoint
+    /// 
+    /// Applies three filters:
+    /// 1. Loop prevention: Don't echo back to source endpoint
+    /// 2. Message filter: Apply allow/block lists
+    /// 3. Intelligent routing: Only send to endpoints that have a route to the target
+    /// 
+    /// Performance critical: Called for every message on every endpoint
     pub fn check_outgoing(&self, msg: &RoutedMessage) -> bool {
+        // 1. Loop prevention
         if msg.source_id == self.id {
             return false;
         }
-        self.filters.check_outgoing(&msg.header, msg.message.message_id())
+
+        // 2. Message filter
+        if !self.filters.check_outgoing(&msg.header, msg.message.message_id()) {
+            return false;
+        }
+
+        // 3. Intelligent routing
+        let target = extract_target(&msg.message);
+
+        #[allow(clippy::expect_used)]
+        let rt = self.routing_table.read();
+        rt.should_send(self.id, target.system_id, target.component_id)
     }
 }
 
@@ -88,7 +109,7 @@ where
                 Ok(0) => break, // EOF
                 Ok(n) => {
                     parser.push(&buf[..n]);
-                    while let Some(frame) = parser.next() {
+                    while let Some(frame) = parser.parse_next() {
                         core_read.handle_incoming_frame(frame);
                     }
                 }

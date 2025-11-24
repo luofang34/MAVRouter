@@ -1,123 +1,103 @@
-//! Performance benchmarks for MAVLink Router
-//!
-//! Run with: cargo bench
-//!
-//! This file provides benchmarks for core routing components.
-//! To use these benchmarks, add the following to Cargo.toml:
-//!
-//! [dev-dependencies]
-//! criterion = "0.5"
-//!
-//! [[bench]]
-//! name = "routing_benchmark"
-//! harness = false
+use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use mavrouter_rs::routing::RoutingTable;
+use mavrouter_rs::mavlink_utils::extract_target;
+use mavlink::common::*;
+use std::time::Duration;
+use mavlink::common::MavMessage; // Explicit import
 
-#[cfg(feature = "benchmarks")]
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+fn benchmark_routing_table_lookup(c: &mut Criterion) {
+    let mut rt = RoutingTable::new();
 
-#[cfg(feature = "benchmarks")]
-fn benchmark_message_parsing(c: &mut Criterion) {
-    // Example MAVLink HEARTBEAT message (v2.0)
-    let heartbeat = vec![
-        0xFD, // MAVLink 2.0 magic
-        0x09, // Payload length
-        0x00, // Incompatibility flags
-        0x00, // Compatibility flags
-        0x00, // Sequence
-        0x01, // System ID
-        0x01, // Component ID
-        0x00, 0x00, 0x00, // Message ID (HEARTBEAT = 0)
-        // Payload (9 bytes)
-        0x00, 0x00, 0x00, 0x00, // custom_mode
-        0x06, // type (MAV_TYPE_GCS)
-        0x08, // autopilot (MAV_AUTOPILOT_INVALID)
-        0x00, // base_mode
-        0x04, // system_status (MAV_STATE_ACTIVE)
-        0x03, // mavlink_version
-        // CRC (2 bytes)
-        0x00, 0x00,
-    ];
+    // Populate with realistic data: 10 systems, 5 components each
+    for sys in 1..=10 {
+        for comp in 1..=5 {
+            rt.update(sys as usize, sys, comp);
+        }
+    }
 
-    let mut group = c.benchmark_group("message_parsing");
-    group.throughput(Throughput::Bytes(heartbeat.len() as u64));
-
-    group.bench_function("parse_heartbeat", |b| {
+    c.bench_function("routing_lookup_hit", |b| {
         b.iter(|| {
-            // Simulate parsing
-            black_box(&heartbeat)
-        });
+            black_box(rt.should_send(1, 5, 3))
+        })
     });
 
+    c.bench_function("routing_lookup_miss", |b| {
+        b.iter(|| {
+            black_box(rt.should_send(1, 99, 1))
+        })
+    });
+
+    c.bench_function("routing_lookup_broadcast", |b| {
+        b.iter(|| {
+            black_box(rt.should_send(1, 0, 0))
+        })
+    });
+}
+
+fn benchmark_target_extraction(c: &mut Criterion) {
+    let cmd = COMMAND_LONG_DATA {
+        target_system: 1,
+        target_component: 2,
+        command: MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
+        confirmation: 0,
+        param1: 0.0,
+        param2: 0.0,
+        param3: 0.0,
+        param4: 0.0,
+        param5: 0.0,
+        param6: 0.0,
+        param7: 0.0,
+    };
+    let msg = MavMessage::COMMAND_LONG(cmd);
+
+    c.bench_function("extract_target_command", |b| {
+        b.iter(|| {
+            black_box(extract_target(&msg))
+        })
+    });
+
+    let hb = MavMessage::HEARTBEAT(HEARTBEAT_DATA::default());
+    c.bench_function("extract_target_broadcast", |b| {
+        b.iter(|| {
+            black_box(extract_target(&hb))
+        })
+    });
+}
+
+fn benchmark_routing_table_update(c: &mut Criterion) {
+    c.bench_function("routing_update", |b| {
+        let mut rt = RoutingTable::new();
+        let mut counter = 0u8;
+        b.iter(|| {
+            counter = counter.wrapping_add(1);
+            rt.update(1, counter, 1);
+        })
+    });
+}
+
+fn benchmark_routing_table_prune(c: &mut Criterion) {
+    let mut group = c.benchmark_group("routing_prune");
+
+    for size in [10, 100, 1000].iter() {
+        let mut rt = RoutingTable::new();
+        for i in 0..*size {
+            rt.update(1, (i % 255) as u8, 1);
+        }
+
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
+            b.iter(|| {
+                rt.prune(Duration::from_secs(300));
+            })
+        });
+    }
     group.finish();
 }
 
-#[cfg(feature = "benchmarks")]
-fn benchmark_routing_table(c: &mut Criterion) {
-    use std::time::Duration;
-
-    let mut group = c.benchmark_group("routing_table");
-
-    group.bench_function("insert_route", |b| {
-        b.iter(|| {
-            // Simulate route insertion
-            black_box((1u8, 1u8, 0usize));
-        });
-    });
-
-    group.bench_function("lookup_route", |b| {
-        b.iter(|| {
-            // Simulate route lookup
-            black_box((1u8, 1u8));
-        });
-    });
-
-    group.finish();
-}
-
-#[cfg(feature = "benchmarks")]
-fn benchmark_message_filtering(c: &mut Criterion) {
-    let mut group = c.benchmark_group("filtering");
-
-    let allowed_ids = vec![0, 1, 30, 33]; // Common message IDs
-
-    group.bench_function("filter_check_allow", |b| {
-        b.iter(|| {
-            let msg_id = black_box(0u32);
-            allowed_ids.contains(&msg_id)
-        });
-    });
-
-    group.bench_function("filter_check_block", |b| {
-        b.iter(|| {
-            let msg_id = black_box(999u32);
-            !allowed_ids.contains(&msg_id)
-        });
-    });
-
-    group.finish();
-}
-
-#[cfg(feature = "benchmarks")]
 criterion_group!(
     benches,
-    benchmark_message_parsing,
-    benchmark_routing_table,
-    benchmark_message_filtering
+    benchmark_routing_table_lookup,
+    benchmark_target_extraction,
+    benchmark_routing_table_update,
+    benchmark_routing_table_prune
 );
-
-#[cfg(feature = "benchmarks")]
 criterion_main!(benches);
-
-#[cfg(not(feature = "benchmarks"))]
-fn main() {
-    println!("Benchmarks are disabled. Enable with:");
-    println!("  cargo bench --features benchmarks");
-    println!("\nFirst, add to Cargo.toml:");
-    println!("  [features]");
-    println!("  benchmarks = []");
-    println!("\n  [dev-dependencies]");
-    println!("  criterion = \"0.5\"");
-    println!("\n  [[bench]]");
-    println!("  name = \"routing_benchmark\"");
-    println!("  harness = false");
-}
