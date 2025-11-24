@@ -438,6 +438,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)] // Allow expect() in tests for descriptive failure messages
 mod tests {
     use super::*;
     use crate::routing::RoutingStats;
