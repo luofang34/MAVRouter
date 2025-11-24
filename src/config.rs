@@ -79,6 +79,10 @@ pub struct GeneralConfig {
     /// Stats log output interval in seconds. Default 60 seconds.
     #[serde(default = "default_stats_log_interval_secs")]
     pub stats_log_interval_secs: u64,
+    /// Path to the Unix socket for querying stats.
+    /// Default: "/tmp/mavrouter.sock". Set to empty string or null to disable.
+    #[serde(default = "default_stats_socket_path")]
+    pub stats_socket_path: Option<String>,
 }
 
 fn default_bus_capacity() -> usize {
@@ -98,6 +102,9 @@ fn default_stats_sample_interval_secs() -> u64 {
 }
 fn default_stats_log_interval_secs() -> u64 {
     60
+}
+fn default_stats_socket_path() -> Option<String> {
+    Some("/tmp/mavrouter.sock".to_string())
 }
 
 #[derive(Debug, Deserialize, Clone)]
