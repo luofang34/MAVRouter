@@ -19,8 +19,9 @@ mod stats;
 
 use crate::config::{Config, EndpointConfig};
 use crate::dedup::Dedup;
+use crate::endpoint_core::ExponentialBackoff;
 use crate::router::create_bus;
-use crate::routing::RoutingTable;
+use crate::routing::{RoutingStats, RoutingTable};
 use crate::stats::StatsHistory;
 use anyhow::Result;
 use clap::Parser;
@@ -436,22 +437,45 @@ where
     F: Fn() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
+    let mut backoff = ExponentialBackoff::new(
+        Duration::from_secs(1),
+        Duration::from_secs(30),
+        2.0,
+    );
+
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => {
                 info!("Supervisor for {} received cancellation signal. Exiting.", name);
                 break;
             }
-            result = task_factory() => {
+            _ = async {
+                let start_time = std::time::Instant::now();
+                let result = task_factory().await;
+                
+                // If task ran for more than 60 seconds, reset backoff
+                if start_time.elapsed() > Duration::from_secs(60) {
+                    backoff.reset();
+                }
+
                 match result {
                     Ok(_) => {
-                        warn!("Supervisor: Task {} finished cleanly (unexpected). Restarting in 1s...", name);
+                        warn!("Supervisor: Task {} finished cleanly (unexpected). Restarting...", name);
                     }
                     Err(e) => {
-                        error!("Supervisor: Task {} failed: {:#}. Restarting in 1s...", name, e);
+                        error!("Supervisor: Task {} failed: {:#}. Restarting...", name, e);
                     }
                 }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+            } => {}
+        }
+        
+        let wait = backoff.next();
+        info!("Supervisor: Waiting {:.1?} before restarting {}", wait, name);
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {},
+            _ = cancel_token.cancelled() => {
+                info!("Supervisor for {} received cancellation signal during backoff. Exiting.", name);
+                break;
             }
         }
     }

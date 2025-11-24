@@ -19,6 +19,39 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
+use std::time::Duration;
+
+/// Exponential backoff helper for connection retries.
+pub struct ExponentialBackoff {
+    current: Duration,
+    min: Duration,
+    max: Duration,
+    multiplier: f64,
+}
+
+impl ExponentialBackoff {
+    pub fn new(min: Duration, max: Duration, multiplier: f64) -> Self {
+        Self {
+            current: min,
+            min,
+            max,
+            multiplier,
+        }
+    }
+
+    pub fn next(&mut self) -> Duration {
+        let wait = self.current;
+        self.current = std::cmp::min(
+            self.max,
+            Duration::from_secs_f64(self.current.as_secs_f64() * self.multiplier),
+        );
+        wait
+    }
+
+    pub fn reset(&mut self) {
+        self.current = self.min;
+    }
+}
 
 /// Represents the shared core logic and resources for a MAVLink endpoint.
 ///

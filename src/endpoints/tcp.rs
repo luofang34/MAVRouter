@@ -9,7 +9,7 @@
 //! automatically retries connection if lost.
 
 use crate::dedup::Dedup;
-use crate::endpoint_core::{run_stream_loop, EndpointCore};
+use crate::endpoint_core::{run_stream_loop, EndpointCore, ExponentialBackoff};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
@@ -22,37 +22,6 @@ use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-
-struct ExponentialBackoff {
-    current: Duration,
-    min: Duration,
-    max: Duration,
-    multiplier: f64,
-}
-
-impl ExponentialBackoff {
-    fn new(min: Duration, max: Duration, multiplier: f64) -> Self {
-        Self {
-            current: min,
-            min,
-            max,
-            multiplier,
-        }
-    }
-
-    fn next(&mut self) -> Duration {
-        let wait = self.current;
-        self.current = std::cmp::min(
-            self.max,
-            Duration::from_secs_f64(self.current.as_secs_f64() * self.multiplier),
-        );
-        wait
-    }
-
-    fn reset(&mut self) {
-        self.current = self.min;
-    }
-}
 
 /// Runs the TCP endpoint logic, continuously handling connections based on the specified mode.
 ///
