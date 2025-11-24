@@ -56,7 +56,7 @@ fn test_concurrent_routing_updates_high_load() {
     }));
 
     for handle in handles {
-        handle.join().unwrap();
+        handle.join().expect("Thread join failed");
     }
 
     // Verification
