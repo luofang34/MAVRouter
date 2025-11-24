@@ -23,7 +23,6 @@ fi
 RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
 ROUTER_PID=$!
 echo "Router PID: $ROUTER_PID"
-ps -p $ROUTER_PID # Check immediately after spawn
 
 # Cleanup trap
 cleanup() {
@@ -34,6 +33,7 @@ trap cleanup EXIT
 
 # Wait for startup
 sleep 3
+pstree -ap $ROUTER_PID
 
 # Verify Process is running
 if ! kill -0 $ROUTER_PID 2>/dev/null; then
