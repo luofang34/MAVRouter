@@ -136,7 +136,7 @@ impl EndpointCore {
                 version: frame.version,
                 timestamp_us,
             }) {
-                debug!("Bus send error: {}", e);
+                warn!("Bus send error: {}", e);
             }
         }
     }
