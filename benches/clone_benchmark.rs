@@ -13,6 +13,7 @@ fn bench_routed_message_clone(c: &mut Criterion) {
         header,
         message: Arc::new(message),
         version: MavlinkVersion::V2,
+        timestamp_us: 0,
     };
 
     c.bench_function("routed_message_clone", |b| {
