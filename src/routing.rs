@@ -158,15 +158,20 @@ impl RoutingTable {
 
     /// Returns current statistics about the routing table.
     pub fn stats(&self) -> RoutingStats {
+        // Efficiently count unique endpoints
+        let mut unique_endpoints = HashSet::new();
+        for entry in self.sys_routes.values() {
+            unique_endpoints.extend(&entry.endpoints);
+        }
+        // Also check component-specific routes in case an endpoint only has a component route?
+        // Logic B says: "If we have a route for target_sysid but NOT the specific component... Send to ALL endpoints that have seen this system".
+        // So sys_routes covers most. But strictly speaking, an endpoint might ONLY be in `routes` if `sys_routes` logic is separated?
+        // update() updates BOTH. So iterating sys_routes is sufficient to find all endpoints that have seen a system.
+        
         RoutingStats {
             total_systems: self.sys_routes.len(),
             total_routes: self.routes.len(),
-            total_endpoints: self
-                .sys_routes
-                .values()
-                .flat_map(|e| e.endpoints.iter())
-                .collect::<HashSet<_>>()
-                .len(),
+            total_endpoints: unique_endpoints.len(),
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
