@@ -85,6 +85,19 @@ jobs:
         run: RUSTDOCFLAGS="-D missing_docs" cargo doc --no-deps --all-features
         continue-on-error: true
 
+  docs-check:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check documentation builds without warnings
+        run: |
+          RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+      - name: Check for broken intra-doc links
+        run: |
+          cargo rustdoc --lib -- -D rustdoc::broken_intra_doc_links
+
   bench:
     name: Benchmark
     runs-on: ubuntu-latest
