@@ -7,6 +7,7 @@
 
 use mavlink::MavHeader;
 use serde::Deserialize;
+use std::collections::HashSet;
 
 /// Defines a set of filters to be applied to MAVLink messages for a specific endpoint.
 ///
@@ -26,42 +27,42 @@ pub struct EndpointFilters {
     /// List of MAVLink message IDs allowed for outgoing traffic.
     /// If non-empty, only messages with these IDs will be sent.
     #[serde(default)]
-    pub allow_msg_id_out: Vec<u32>,
+    pub allow_msg_id_out: HashSet<u32>,
     /// List of MAVLink message IDs blocked for outgoing traffic.
     #[serde(default)]
-    pub block_msg_id_out: Vec<u32>,
+    pub block_msg_id_out: HashSet<u32>,
     /// List of source component IDs allowed for outgoing traffic.
     #[serde(default)]
-    pub allow_src_comp_out: Vec<u8>,
+    pub allow_src_comp_out: HashSet<u8>,
     /// List of source component IDs blocked for outgoing traffic.
     #[serde(default)]
-    pub block_src_comp_out: Vec<u8>,
+    pub block_src_comp_out: HashSet<u8>,
     /// List of source system IDs allowed for outgoing traffic.
     #[serde(default)]
-    pub allow_src_sys_out: Vec<u8>,
+    pub allow_src_sys_out: HashSet<u8>,
     /// List of source system IDs blocked for outgoing traffic.
     #[serde(default)]
-    pub block_src_sys_out: Vec<u8>,
+    pub block_src_sys_out: HashSet<u8>,
 
     /// List of MAVLink message IDs allowed for incoming traffic.
     /// If non-empty, only messages with these IDs will be accepted.
     #[serde(default)]
-    pub allow_msg_id_in: Vec<u32>,
+    pub allow_msg_id_in: HashSet<u32>,
     /// List of MAVLink message IDs blocked for incoming traffic.
     #[serde(default)]
-    pub block_msg_id_in: Vec<u32>,
+    pub block_msg_id_in: HashSet<u32>,
     /// List of source component IDs allowed for incoming traffic.
     #[serde(default)]
-    pub allow_src_comp_in: Vec<u8>,
+    pub allow_src_comp_in: HashSet<u8>,
     /// List of source component IDs blocked for incoming traffic.
     #[serde(default)]
-    pub block_src_comp_in: Vec<u8>,
+    pub block_src_comp_in: HashSet<u8>,
     /// List of source system IDs allowed for incoming traffic.
     #[serde(default)]
-    pub allow_src_sys_in: Vec<u8>,
+    pub allow_src_sys_in: HashSet<u8>,
     /// List of source system IDs blocked for incoming traffic.
     #[serde(default)]
-    pub block_src_sys_in: Vec<u8>,
+    pub block_src_sys_in: HashSet<u8>,
 }
 
 impl EndpointFilters {
@@ -131,12 +132,12 @@ impl EndpointFilters {
     fn check(
         header: &MavHeader,
         msg_id: u32,
-        allow_msg: &[u32],
-        block_msg: &[u32],
-        allow_comp: &[u8],
-        block_comp: &[u8],
-        allow_sys: &[u8],
-        block_sys: &[u8],
+        allow_msg: &HashSet<u32>,
+        block_msg: &HashSet<u32>,
+        allow_comp: &HashSet<u8>,
+        block_comp: &HashSet<u8>,
+        allow_sys: &HashSet<u8>,
+        block_sys: &HashSet<u8>,
     ) -> bool {
         // Msg ID
         if !allow_msg.is_empty() && !allow_msg.contains(&msg_id) {
@@ -174,7 +175,7 @@ mod tests {
     #[test]
     fn test_filter_logic() {
         let filters = EndpointFilters {
-            allow_msg_id_out: vec![0], // Only allow Heartbeat (ID 0)
+            allow_msg_id_out: HashSet::from([0]), // Only allow Heartbeat (ID 0)
             ..Default::default()
         };
 
@@ -190,7 +191,7 @@ mod tests {
     #[test]
     fn test_filter_block() {
         let filters = EndpointFilters {
-            block_msg_id_out: vec![30], // Block ATTITUDE (ID 30)
+            block_msg_id_out: HashSet::from([30]), // Block ATTITUDE (ID 30)
             ..Default::default()
         };
 
