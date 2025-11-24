@@ -1,23 +1,17 @@
 [package]
-name = "mavrouter"
+name = "mavrouter-rs"
 version = "0.1.0"
 edition = "2021"
-authors = ["Fang Luo <luofang@luofang.org>"]
-description = "A MAVLink router written in Rust"
-license = "GPL-3.0"
-repository = "https://github.com/luofang34/mavrouter-rs"
-homepage = "https://github.com/luofang34/mavrouter-rs"
-documentation = "https://docs.rs/mavrouter"
-readme = "README.md"
-keywords = ["mavlink", "router", "telemetry"]
-categories = ["network-programming"]
-exclude = [
-    "logs/*",
-    "*.log",
-    "test_config.toml",
-    "router.pid",
-    ".github/*",
-]
+authors = ["Gemini Agent <agent@gemini.com>"]
+description = "A high-performance, async MAVLink router written in Rust"
+
+[lib]
+name = "mavrouter_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mavrouter-rs"
+path = "src/main.rs"
 
 [dependencies]
 parking_lot = "0.12"
@@ -36,14 +30,7 @@ tokio-util = { version = "0.7", features = ["codec", "net"] }
 bytes = "1.0"
 
 [dev-dependencies]
-criterion = "0.5"
-
-[features]
-benchmarks = []
-
-[[bench]]
-name = "routing_benchmark"
-harness = false
+serial_test = "3.0"
 
 [lints.rust]
 unsafe_code = "forbid"
