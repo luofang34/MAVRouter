@@ -4,8 +4,8 @@
 # Pre-release validation hooks
 pre-release-hook = ["./scripts/pre_release_check.sh"]
 
-# Disable automatic push (do it manually for safety)
-push = false
+# Enable automatic push to ensure GitHub tags match crates.io releases
+push = true
 
 # Tag settings
 tag = true
