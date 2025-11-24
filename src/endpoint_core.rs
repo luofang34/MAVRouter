@@ -1,9 +1,10 @@
 use crate::dedup::Dedup;
 use crate::filter::EndpointFilters;
 use crate::framing::{MavlinkFrame, StreamParser};
-use crate::mavlink_utils::extract_target; // Will be added in Phase 2.3
+use crate::mavlink_utils::extract_target;
 use crate::router::RoutedMessage;
 use crate::routing::RoutingTable;
+use crate::{lock_mutex, lock_read, lock_write}; // Import macros
 use anyhow::Result;
 use mavlink::{MavlinkVersion, Message};
 use parking_lot::{Mutex, RwLock};
@@ -11,7 +12,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, warn, trace};
 
 #[derive(Clone)]
 pub struct EndpointCore {
@@ -24,7 +25,6 @@ pub struct EndpointCore {
 
 impl EndpointCore {
     pub fn handle_incoming_frame(&self, frame: MavlinkFrame) {
-        // Serialize for Dedup (inefficient but needed for current Dedup API)
         let mut temp_buf = Vec::new();
         if let Err(e) = match frame.version {
             MavlinkVersion::V2 => mavlink::write_v2_msg(&mut temp_buf, frame.header, &frame.message),
@@ -35,15 +35,13 @@ impl EndpointCore {
         }
 
         let is_dup = {
-            #[allow(clippy::expect_used)]
-            let mut dd = self.dedup.lock();
+            let mut dd = lock_mutex!(self.dedup);
             dd.is_duplicate(&temp_buf)
         };
 
         if !is_dup && self.filters.check_incoming(&frame.header, frame.message.message_id()) {
             {
-                #[allow(clippy::expect_used)]
-                let mut rt = self.routing_table.write();
+                let mut rt = lock_write!(self.routing_table);
                 rt.update(self.id, frame.header.system_id, frame.header.component_id);
             }
             if let Err(e) = self.bus_tx.send(RoutedMessage {
@@ -57,31 +55,30 @@ impl EndpointCore {
         }
     }
 
-    /// Check if a message should be sent out on this endpoint
-    /// 
-    /// Applies three filters:
-    /// 1. Loop prevention: Don't echo back to source endpoint
-    /// 2. Message filter: Apply allow/block lists
-    /// 3. Intelligent routing: Only send to endpoints that have a route to the target
-    /// 
-    /// Performance critical: Called for every message on every endpoint
     pub fn check_outgoing(&self, msg: &RoutedMessage) -> bool {
-        // 1. Loop prevention
         if msg.source_id == self.id {
             return false;
         }
 
-        // 2. Message filter
         if !self.filters.check_outgoing(&msg.header, msg.message.message_id()) {
             return false;
         }
 
-        // 3. Intelligent routing
         let target = extract_target(&msg.message);
+        let rt = lock_read!(self.routing_table);
+        let should_send = rt.should_send(self.id, target.system_id, target.component_id);
 
-        #[allow(clippy::expect_used)]
-        let rt = self.routing_table.read();
-        rt.should_send(self.id, target.system_id, target.component_id)
+        if !should_send && target.system_id != 0 {
+            trace!(
+                endpoint_id = self.id,
+                target_sys = target.system_id,
+                target_comp = target.component_id,
+                msg_id = msg.message.message_id(),
+                "Routing decision: DROP (no route)"
+            );
+        }
+
+        should_send
     }
 }
 

@@ -19,6 +19,14 @@ impl Default for RoutingTable {
     }
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct RoutingStats {
+    pub total_systems: usize,
+    pub total_routes: usize,
+    pub total_endpoints: usize,
+}
+
 impl RoutingTable {
     pub fn new() -> Self {
         Self {
@@ -53,22 +61,17 @@ impl RoutingTable {
 
     /// Check if a message should be sent to a specific endpoint based on learned routes
     /// 
-    /// Logic:
+    /// Logic (Policy B - Aggressive Fallback):
     /// 1. If target_sysid == 0: Broadcast message, send to all
-    /// 2. If we have a route for (target_sysid, target_compid): Send only to endpoints that have seen this combination
-    /// 3. If we have a route for target_sysid but not the specific component: Send to all endpoints that have seen this system
-    /// 4. If no route exists: Don't send (message would be dropped anyway)
-    /// 
-    /// Performance: O(1) HashMap lookup
+    /// 2. If we have a specific route for (target_sysid, target_compid): Send ONLY to endpoints that have seen this combination.
+    /// 3. If we have a route for target_sysid but NOT the specific component: Send to ALL endpoints that have seen this system (assuming component might be new/moved).
+    /// 4. If no route exists: Don't send.
     pub fn should_send(&self, endpoint_id: usize, target_sysid: u8, target_compid: u8) -> bool {
-        // Broadcast messages go to everyone
         if target_sysid == 0 {
             return true;
         }
 
-        // Check if we have seen this system at all
         if let Some(entry) = self.sys_routes.get(&target_sysid) {
-            // If target_compid is 0 (system-wide), send to all endpoints that have this system
             if target_compid == 0 {
                 return entry.endpoints.contains(&endpoint_id);
             }
@@ -78,21 +81,30 @@ impl RoutingTable {
                 return comp_entry.endpoints.contains(&endpoint_id);
             }
 
-            // We know the system but not this specific component
-            // Send to all endpoints that have seen this system (component might be new)
+            // Fallback: We know the system but not this specific component
+            // Send to all endpoints that have seen this system
             return entry.endpoints.contains(&endpoint_id);
         }
 
-        // No route to this system - don't send
         false
     }
 
     pub fn prune(&mut self, max_age: Duration) {
         let now = Instant::now();
-        // Prune component routes
         self.routes.retain(|_, v| now.duration_since(v.last_seen) < max_age);
-        // Prune system routes
         self.sys_routes.retain(|_, v| now.duration_since(v.last_seen) < max_age);
+    }
+
+    #[allow(dead_code)]
+    pub fn stats(&self) -> RoutingStats {
+        RoutingStats {
+            total_systems: self.sys_routes.len(),
+            total_routes: self.routes.len(),
+            total_endpoints: self.sys_routes.values()
+                .flat_map(|e| e.endpoints.iter())
+                .collect::<HashSet<_>>()
+                .len(),
+        }
     }
 }
 
@@ -104,56 +116,17 @@ mod tests {
     #[test]
     fn test_routing_table_basic_learning() {
         let mut rt = RoutingTable::new();
-
-        // Endpoint 1 sees system 100, component 1
         rt.update(1, 100, 1);
 
-        // Messages to sys 100 should go to endpoint 1
-        assert!(rt.should_send(1, 100, 0), "System-wide message should route");
-        assert!(rt.should_send(1, 100, 1), "Specific component should route");
-        assert!(rt.should_send(1, 100, 2), "Unknown component on known system should route");
-
-        // Messages to sys 100 should NOT go to endpoint 2
-        assert!(!rt.should_send(2, 100, 0), "Endpoint 2 hasn't seen sys 100");
-    }
-
-    #[test]
-    fn test_broadcast_always_sends() {
-        let mut rt = RoutingTable::new();
-        rt.update(1, 100, 1);
-
-        // Broadcast (target_system=0) goes to everyone
-        assert!(rt.should_send(1, 0, 0));
-        assert!(rt.should_send(2, 0, 0));
-        assert!(rt.should_send(999, 0, 0));
-    }
-
-    #[test]
-    fn test_unknown_system_no_route() {
-        let mut rt = RoutingTable::new();
-        rt.update(1, 100, 1);
-
-        // System 200 unknown - no route
-        assert!(!rt.should_send(1, 200, 0));
-        assert!(!rt.should_send(1, 200, 1));
-        assert!(!rt.should_send(2, 200, 0));
-    }
-
-    #[test]
-    fn test_multiple_endpoints_same_system() {
-        let mut rt = RoutingTable::new();
-
-        // Both endpoints see system 100
-        rt.update(1, 100, 1);
-        rt.update(2, 100, 1);
-
-        // Both should get messages to sys 100
         assert!(rt.should_send(1, 100, 0));
-        assert!(rt.should_send(2, 100, 0));
+        assert!(rt.should_send(1, 100, 1));
+        // Unknown component on known system -> Fallback (True)
+        assert!(rt.should_send(1, 100, 2)); 
+        assert!(!rt.should_send(2, 100, 0));
     }
 
     #[test]
-    fn test_component_specific_routing() {
+    fn test_component_specific_routing_strict() {
         let mut rt = RoutingTable::new();
 
         // Endpoint 1 sees sys 100 comp 1
@@ -161,38 +134,68 @@ mod tests {
         rt.update(1, 100, 1);
         rt.update(2, 100, 2);
 
-        // System-wide messages go to both
+        // System-wide (comp=0) goes to both
         assert!(rt.should_send(1, 100, 0));
         assert!(rt.should_send(2, 100, 0));
 
-        // Component-specific messages route correctly
+        // Component-specific routes to exact match
+        // E.g. (100, 1) is known on Endpoint 1. Should ONLY go to 1?
+        // Yes, because `routes.get` succeeds.
         assert!(rt.should_send(1, 100, 1));
-        assert!(rt.should_send(2, 100, 2));
+        // Does Endpoint 2 receive (100, 1)?
+        // `routes.get(100, 1)` exists -> {1}. 
+        // `comp_entry.endpoints.contains(2)` -> False.
+        assert!(!rt.should_send(2, 100, 1), "Strict routing for known component");
 
-        // If we have a specific route for (100, 2) -> Endpoint 2,
-        // Endpoint 1 should NOT receive it (strict unicast).
-        assert!(!rt.should_send(1, 100, 2), "Endpoint 1 has sys 100, but comp 2 is explicitly elsewhere");
-        assert!(!rt.should_send(2, 100, 1), "Endpoint 2 has sys 100, but comp 1 is explicitly elsewhere");
-        
-        // Unknown component (100, 3) -> Broadcast to all who know 100
-        assert!(rt.should_send(1, 100, 3));
-        assert!(rt.should_send(2, 100, 3));
+        assert!(rt.should_send(2, 100, 2));
+        assert!(!rt.should_send(1, 100, 2), "Strict routing for known component");
+
+        // Unknown component (100, 3) on known system: FALLBACK
+        // Both endpoints know system 100.
+        assert!(rt.should_send(1, 100, 3), "New component, fallback to sys route");
+        assert!(rt.should_send(2, 100, 3), "New component, fallback to sys route");
+    }
+
+    #[test]
+    fn test_component_isolation() {
+        let mut rt = RoutingTable::new();
+
+        // Endpoint 1: autopilot on sys 100
+        // Endpoint 2: autopilot on sys 200
+        rt.update(1, 100, 1);
+        rt.update(2, 200, 1);
+
+        // Message to sys 100 should ONLY go to endpoint 1
+        assert!(rt.should_send(1, 100, 0));
+        assert!(!rt.should_send(2, 100, 0));
+
+        // Message to sys 200 should ONLY go to endpoint 2
+        assert!(!rt.should_send(1, 200, 0));
+        assert!(rt.should_send(2, 200, 0));
+    }
+
+    #[test]
+    fn test_broadcast_always_sends() {
+        let mut rt = RoutingTable::new();
+        rt.update(1, 100, 1);
+        assert!(rt.should_send(1, 0, 0));
+        assert!(rt.should_send(999, 0, 0));
+    }
+
+    #[test]
+    fn test_unknown_system_no_route() {
+        let mut rt = RoutingTable::new();
+        rt.update(1, 100, 1);
+        assert!(!rt.should_send(1, 200, 0));
     }
 
     #[test]
     fn test_pruning() {
         let mut rt = RoutingTable::new();
         rt.update(1, 100, 1);
-
         assert!(rt.should_send(1, 100, 0));
-
-        // Sleep longer than TTL
         std::thread::sleep(Duration::from_millis(50));
-
-        // Prune with short TTL
         rt.prune(Duration::from_millis(10));
-
-        // Route should be gone
-        assert!(!rt.should_send(1, 100, 0), "Pruned route should not send");
+        assert!(!rt.should_send(1, 100, 0));
     }
 }

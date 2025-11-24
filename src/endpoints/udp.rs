@@ -14,6 +14,8 @@ use crate::dedup::Dedup;
 use crate::filter::EndpointFilters;
 use tokio_util::sync::CancellationToken;
 use crate::endpoint_core::EndpointCore;
+use crate::framing::MavlinkFrame;
+use crate::lock_mutex;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -63,8 +65,7 @@ pub async fn run(
             match r_socket.recv_from(&mut buf).await {
                 Ok((len, addr)) => {
                     {
-                        #[allow(clippy::expect_used)]
-                        let mut guard = clients_recv.lock();
+                        let mut guard = lock_mutex!(clients_recv);
                         guard.insert(addr);
                     }
                     
@@ -77,7 +78,7 @@ pub async fn run(
 
                     if let Ok((header, message, version)) = res {
                         // Use Core logic
-                        core_rx.handle_incoming_frame(crate::framing::MavlinkFrame { header, message, version });
+                        core_rx.handle_incoming_frame(MavlinkFrame { header, message, version });
                     }
                 }
                 Err(e) => {
@@ -90,8 +91,7 @@ pub async fn run(
     // Sender Task
     let clients_send = clients.clone();
     let s_socket = s.clone();
-    // filters_tx is inside core
-    let mut bus_rx_loop = bus_rx; // Move into closure
+    let mut bus_rx_loop = bus_rx;
     let core_tx = core.clone();
     
     let send_loop = async move {
@@ -117,8 +117,7 @@ pub async fn run(
                          }
                     } else {
                          let targets: Vec<SocketAddr> = {
-                             #[allow(clippy::expect_used)]
-                             let guard = clients_send.lock();
+                             let guard = lock_mutex!(clients_send);
                              guard.iter().cloned().collect()
                          };
                          for client in targets {

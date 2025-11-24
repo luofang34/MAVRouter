@@ -14,6 +14,7 @@ pub struct MessageTarget {
 
 impl MessageTarget {
     /// Returns true if this is a broadcast message (system_id == 0)
+    #[allow(dead_code)]
     pub fn is_broadcast(&self) -> bool {
         self.system_id == 0
     }

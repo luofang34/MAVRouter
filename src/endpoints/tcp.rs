@@ -93,3 +93,5 @@ pub async fn run(
         }
     }
 }
+
+// handle_connection removed as it is replaced by run_stream_loop

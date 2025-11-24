@@ -1,20 +1,33 @@
 #![deny(unsafe_code)]
 #![deny(clippy::unwrap_used)]
 
+mod config;
+mod router;
+mod endpoint_core;
+mod endpoints {
+    pub mod udp;
+    pub mod tcp;
+    pub mod serial;
+    pub mod tlog;
+}
+mod dedup;
+mod routing;
+mod filter;
+mod framing;
+mod mavlink_utils;
+pub mod lock_helpers;
+
 use anyhow::Result;
 use clap::Parser;
 use tracing::{info, error, warn};
+use crate::config::{Config, EndpointConfig};
+use crate::router::create_bus;
+use crate::routing::RoutingTable;
+use crate::dedup::Dedup;
 use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-
-use mavrouter_rs::config::{Config, EndpointConfig, EndpointMode};
-use mavrouter_rs::router::create_bus;
-use mavrouter_rs::routing::RoutingTable;
-use mavrouter_rs::dedup::Dedup;
-use mavrouter_rs::endpoints;
-use mavrouter_rs::filter::EndpointFilters;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -66,7 +79,7 @@ async fn main() -> Result<()> {
                     break;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(prune_interval)) => {
-                    let mut rt = rt_prune.write();
+                    let mut rt = lock_write!(rt_prune);
                     rt.prune(Duration::from_secs(prune_ttl));
                 }
             }
@@ -82,7 +95,7 @@ async fn main() -> Result<()> {
         let rt = routing_table.clone();
         let dd = dedup.clone();
         let id = config.endpoint.len();
-        let filters = EndpointFilters::default(); 
+        let filters = crate::filter::EndpointFilters::default(); 
         let addr = format!("0.0.0.0:{}", port);
         let task_token = cancel_token.child_token();
         
@@ -93,10 +106,10 @@ async fn main() -> Result<()> {
             let dd = dd.clone();
             let filters = filters.clone();
             let addr = addr.clone();
-            let m = EndpointMode::Server;
+            let m = crate::config::EndpointMode::Server; 
             let token = task_token.clone();
             async move {
-                endpoints::tcp::run(id, addr, m, bus_tx, bus_rx, rt, dd, filters, token).await
+                crate::endpoints::tcp::run(id, addr, m, bus_tx, bus_rx, rt, dd, filters, token).await
             }
         })));
     }
@@ -114,7 +127,7 @@ async fn main() -> Result<()> {
                 let dir = dir.clone();
                 let token = task_token.clone();
                 async move {
-                    endpoints::tlog::run(dir, bus_rx, token).await
+                    crate::endpoints::tlog::run(dir, bus_rx, token).await
                 }
             })));
         }
@@ -144,7 +157,7 @@ async fn main() -> Result<()> {
                     let m = m.clone();
                     let token = task_token.clone();
                     async move {
-                        endpoints::udp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token).await
+                        crate::endpoints::udp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token).await
                     }
                 })));
             }
@@ -164,7 +177,7 @@ async fn main() -> Result<()> {
                     let m = m.clone();
                     let token = task_token.clone();
                     async move {
-                        endpoints::tcp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token).await
+                        crate::endpoints::tcp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token).await
                     }
                 })));
             }
@@ -183,7 +196,7 @@ async fn main() -> Result<()> {
                     let dev = dev.clone();
                     let token = task_token.clone();
                     async move {
-                        endpoints::serial::run(i, dev, b, bus_tx, bus_rx, rt, dd, f, token).await
+                        crate::endpoints::serial::run(i, dev, b, bus_tx, bus_rx, rt, dd, f, token).await
                     }
                 })));
             }
