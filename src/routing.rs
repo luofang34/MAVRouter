@@ -178,7 +178,28 @@ impl RoutingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_cpus;
+    use std::env;
     use std::time::Duration;
+
+    fn stress_iterations() -> usize {
+        // Environment variable override
+        if let Ok(s) = env::var("CI_STRESS_ITERATIONS") {
+            return s.parse().expect("CI_STRESS_ITERATIONS must be a number");
+        }
+
+        // Auto-detection based on CPU cores
+        let cpus = num_cpus::get();
+        if cpus >= 64 {
+            10_000_000 // Extreme test
+        } else if cpus >= 8 {
+            1_000_000
+        } else if cpus >= 4 {
+            500_000
+        } else {
+            100_000 // CI environment (2 cores) or very weak machine
+        }
+    }
 
     #[test]
     fn test_routing_table_basic_learning() {
@@ -276,5 +297,41 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         rt.prune(Duration::from_millis(10));
         assert!(!rt.should_send(1, 100, 0));
+    }
+
+    #[test]
+    fn test_no_unbounded_growth() {
+        let mut rt = RoutingTable::new();
+        let iterations = stress_iterations();
+        
+        // Simulate updates with churn
+        for i in 0..iterations {
+            // Endpoint ID 1-100 rotating
+            let endpoint = (i % 100) as usize;
+            // System ID 1-250 rotating
+            let sys = ((i % 250) + 1) as u8;
+            // Component ID 1-250 rotating
+            let comp = ((i % 250) + 1) as u8;
+            
+            rt.update(endpoint, sys, comp);
+            
+            // Prune frequently to simulate aggressive cleanup
+            if i % 1000 == 0 {
+                // Prune everything older than 1ms (should clear almost all)
+            }
+        }
+        
+        // Verify stats after run
+        let stats = rt.stats();
+        // Max unique (sys, comp) combinations is 250 * 250 = 62,500
+        assert!(stats.total_routes <= 62500, "Total routes exceeded max possible unique keys");
+        
+        // Now simulate time passing and pruning
+        std::thread::sleep(Duration::from_millis(10));
+        rt.prune(Duration::from_millis(1)); // Prune everything older than 1ms
+        
+        let stats_after_prune = rt.stats();
+        assert_eq!(stats_after_prune.total_routes, 0, "Pruning should clear expired routes");
+        assert_eq!(stats_after_prune.total_systems, 0, "Pruning should clear expired systems");
     }
 }

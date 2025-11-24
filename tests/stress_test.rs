@@ -4,7 +4,29 @@
 
 use mavrouter_rs::dedup::Dedup;
 use mavrouter_rs::routing::RoutingTable;
+use num_cpus;
+use std::env;
 use std::time::Duration;
+
+// Helper to determine stress test iterations based on environment
+fn stress_iterations() -> usize {
+    // Environment variable override
+    if let Ok(s) = env::var("CI_STRESS_ITERATIONS") {
+        return s.parse().expect("CI_STRESS_ITERATIONS must be a number");
+    }
+
+    // Auto-detection based on CPU cores
+    let cpus = num_cpus::get();
+    if cpus >= 64 {
+        10_000_000 // Extreme test
+    } else if cpus >= 8 {
+        1_000_000
+    } else if cpus >= 4 {
+        500_000
+    } else {
+        100_000 // CI environment (2 cores) or very weak machine
+    }
+}
 
 #[test]
 fn test_routing_table_stress_functional() {
@@ -19,9 +41,11 @@ fn test_routing_table_stress_functional() {
         }
     }
 
-    // Stress test: 100k operations should complete without panic
-    // This verifies functional correctness under load, not raw performance (see benches/)
-    for i in 0..100_000 {
+    // Stress test: N operations should complete without panic
+    let iterations = stress_iterations();
+    println!("Running test_routing_table_stress_functional with {} iterations", iterations);
+
+    for i in 0..iterations {
         let sys = ((i % 100) + 1) as u8;
         let comp = ((i % 10) + 1) as u8;
         let endpoint = (i % 10) as usize;
@@ -39,9 +63,11 @@ fn test_routing_table_stress_functional() {
 #[test]
 fn test_dedup_memory_actually_bounded() {
     let mut dedup = Dedup::new(Duration::from_millis(100));
+    let iterations = stress_iterations();
+    println!("Running test_dedup_memory_actually_bounded with {} iterations", iterations);
 
-    // Insert 100k packets
-    for i in 0..100_000 {
+    // Insert N packets
+    for i in 0..iterations {
         let data = format!("packet_{}", i);
         dedup.is_duplicate(data.as_bytes());
     }
@@ -49,8 +75,8 @@ fn test_dedup_memory_actually_bounded() {
     // Wait for cleanup
     std::thread::sleep(Duration::from_millis(150));
 
-    // Insert another 100k (should not OOM, should prune old)
-    for i in 100_000..200_000 {
+    // Insert another N (should not OOM, should prune old)
+    for i in iterations..(iterations * 2) {
         let data = format!("packet_{}", i);
         dedup.is_duplicate(data.as_bytes());
     }
