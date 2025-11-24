@@ -198,7 +198,7 @@ async fn main() -> Result<()> {
                             .as_secs();
 
                         let current_timestamp = stats.timestamp; // Capture timestamp before move
-                        history.push(stats);
+                        history.push(stats.clone());
 
                         // Periodic logging
                         if current_timestamp.saturating_sub(last_log_time) >= log_interval {
