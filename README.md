@@ -47,6 +47,29 @@ Designed for embedded environments.
 | Routing Update    | ~100ns     |
 | Pruning (1000 entries) | ~2.8µs  |
 
+## Quick Start
+
+Install from crates.io:
+```bash
+cargo install mavrouter-rs
+```
+
+Basic usage:
+```bash
+# Create config file
+cat > mavrouter.toml <<EOF
+[general]
+tcp_port = 5760
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyACM0"
+baud = 115200
+EOF
+
+# Run the router
+mavrouter-rs --config mavrouter.toml
+```
+
 ## Usage
 
 ### Build
