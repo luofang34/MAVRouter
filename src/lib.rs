@@ -35,7 +35,7 @@
 
 #![deny(unsafe_code)]
 #![deny(clippy::unwrap_used)]
-#![warn(missing_docs)]  // Enable missing_docs warning
+#![deny(missing_docs)]  // Enforce 100% documentation coverage
 
 /// Router configuration and parsing utilities.
 pub mod config;
