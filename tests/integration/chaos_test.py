@@ -95,10 +95,8 @@ if __name__ == "__main__":
     if not test_fd_exhaustion(): failed.append("fd_exhaustion")
 
     if failed:
-        print(f"\n[Chaos] ⚠️ WARNING: {len(failed)} sub-tests failed: {failed}")
-        print("[Chaos] This is expected behavior for chaos tests.")
-        # Do NOT exit with error code, let the shell script decide if chaos failure is fatal
-        sys.exit(0) 
+        print(f"⚠️ WARNING: {len(failed)} chaos tests failed: {failed}")
+        print("(This is acceptable for chaos tests)")
     else:
-        print("\n[Chaos] ✅ All Chaos Tests Passed.")
-        sys.exit(0)
+        print("✅ All chaos tests passed")
+    # Do not call sys.exit(1) to allow full_hw_validation.sh to continue
