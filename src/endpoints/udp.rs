@@ -18,10 +18,11 @@ use crate::routing::RoutingTable;
 use anyhow::{Context, Result};
 use mavlink::MavlinkVersion;
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -95,7 +96,8 @@ pub async fn run(
     let r = Arc::new(socket);
     let s = r.clone();
 
-    let clients = Arc::new(Mutex::new(HashSet::new()));
+    // Map of client address to last seen time
+    let clients = Arc::new(Mutex::new(HashMap::new()));
 
     let clients_recv = clients.clone();
     let r_socket = r.clone();
@@ -109,7 +111,7 @@ pub async fn run(
                 Ok((len, addr)) => {
                     {
                         let mut guard = lock_mutex!(clients_recv);
-                        guard.insert(addr);
+                        guard.insert(addr, Instant::now());
                     }
 
                     let mut cursor = Cursor::new(&buf[..len]);
@@ -166,16 +168,16 @@ pub async fn run(
 
                     if let Some(target) = target_addr {
                         if let Err(e) = s_socket.send_to(&buf, target).await {
-                            debug!("UDP send error to target: {}", e);
+                            warn!("UDP send error to target: {}", e);
                         }
                     } else {
                         let targets: Vec<SocketAddr> = {
                             let guard = lock_mutex!(clients_send);
-                            guard.iter().cloned().collect()
+                            guard.keys().cloned().collect()
                         };
                         for client in targets {
                             if let Err(e) = s_socket.send_to(&buf, client).await {
-                                debug!("UDP broadcast error to {}: {}", client, e);
+                                warn!("UDP broadcast error to {}: {}", client, e);
                             }
                         }
                     }
@@ -188,9 +190,28 @@ pub async fn run(
         }
     };
 
+    // Cleanup Task (runs every 60s, removes clients inactive for > 300s)
+    let clients_cleanup = clients.clone();
+    let cleanup_loop = async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let now = Instant::now();
+            let ttl = Duration::from_secs(300);
+            let mut guard = lock_mutex!(clients_cleanup);
+            let initial_len = guard.len();
+            guard.retain(|_, last_seen| now.duration_since(*last_seen) < ttl);
+            let dropped = initial_len - guard.len();
+            if dropped > 0 {
+                debug!("UDP Cleanup: removed {} stale clients", dropped);
+            }
+        }
+    };
+
     tokio::select! {
         _ = recv_loop => Ok(()),
         _ = send_loop => Ok(()),
+        _ = cleanup_loop => Ok(()),
         _ = token.cancelled() => Ok(()),
     }
 }
