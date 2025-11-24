@@ -128,6 +128,7 @@ pub async fn run(
 /// # Errors
 ///
 /// Returns an `anyhow::Error` if the serial port cannot be opened or configured.
+#[allow(unused_mut)]
 async fn open_and_run(
     device: &str,
     baud: u32,

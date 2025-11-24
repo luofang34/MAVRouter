@@ -165,6 +165,7 @@ impl Config {
     ///
     /// Returns an `anyhow::Error` if the configuration contains invalid or
     /// conflicting settings.
+    #[allow(unused_variables)] // 'device' is unused on non-Unix platforms
     pub fn validate(&self) -> Result<()> {
         let mut ports = std::collections::HashSet::new();
 
