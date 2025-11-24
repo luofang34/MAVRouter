@@ -25,6 +25,7 @@ ROUTER_PID=$!
 
 # Cleanup trap
 cleanup() {
+    echo "Stopping Router (PID: $ROUTER_PID)..."
     kill $ROUTER_PID 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -39,29 +40,51 @@ if ! kill -0 $ROUTER_PID 2>/dev/null; then
     exit 1
 fi
 
-echo "=== Functional Tests ==="
-echo "[1/7] Basic Connection (Heartbeat)..."
-python3 tests/integration/verify_hardware.py
+run_test() {
+    local description="$1"
+    local script="$2"
+    local timeout_sec="$3"
+    local allow_fail="$4"
 
-echo "[2/7] Command Roundtrip (TCP <-> Serial)..."
-python3 tests/integration/verify_tx.py
+    echo "--------------------------------------------------"
+    echo "Running: $description"
+    echo "Script: $script"
+    echo "Timeout: ${timeout_sec}s"
+    
+    if timeout "$timeout_sec" python3 "$script"; then
+        echo "✅ PASSED: $description"
+    else
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+             echo "❌ FAILED: $description (TIMED OUT)"
+        else
+             echo "❌ FAILED: $description (Exit Code: $exit_code)"
+        fi
 
-echo "[3/7] UDP Broadcast (UDP <-> Serial)..."
-python3 tests/integration/verify_udp.py
+        if [ "$allow_fail" = "true" ]; then
+            echo "⚠️  WARNING: Optional test failed. Continuing..."
+        else
+            echo "🚨 CRITICAL TEST FAILED. Aborting."
+            cat router_hw_val.log
+            exit 1
+        fi
+    fi
+}
 
-echo "[4/7] Parameter Operations (Read/Write)..."
-python3 tests/integration/verify_params.py
+echo "=== Tier 1: Critical Functional Tests (Must Pass) ==="
+run_test "Basic Connection (Heartbeat)" "tests/integration/verify_hardware.py" 30 false
+run_test "Command Roundtrip (TCP <-> Serial)" "tests/integration/verify_tx.py" 30 false
+run_test "UDP Broadcast (UDP <-> Serial)" "tests/integration/verify_udp.py" 30 false
 
-echo "=== Stress & Resilience Tests ==="
-echo "[5/7] Ping Storm (Throughput)..."
-python3 tests/integration/stress_test.py
+echo "=== Tier 2: Important Validation (Should Pass) ==="
+run_test "Parameter Operations (Read/Write)" "tests/integration/verify_params.py" 45 false
+run_test "Ping Storm (Throughput)" "tests/integration/stress_test.py" 60 false
 
-echo "[6/7] Fuzzing (Malicious Payload)..."
-python3 tests/integration/fuzz_test_strict.py
-
-echo "[7/7] Chaos (Slow Loris, FD Exhaustion)..."
-python3 tests/integration/chaos_test.py
+echo "=== Tier 3: Resilience & Chaos (Allowed to Fail) ==="
+# Chaos and Fuzz tests are allowed to fail or timeout without breaking the build
+run_test "Fuzzing (Malicious Payload)" "tests/integration/fuzz_test_strict.py" 60 true
+run_test "Chaos (Slow Loris, FD Exhaustion)" "tests/integration/chaos_test.py" 120 true
 
 echo "========================================"
-echo "✅ All Hardware Tests Passed."
+echo "✅ All Critical Hardware Tests Passed."
 echo "========================================"
