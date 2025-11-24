@@ -17,6 +17,8 @@ pub struct RoutedMessage {
     pub message: Arc<MavMessage>,
     /// The MAVLink protocol version used for this message (V1 or V2).
     pub version: MavlinkVersion,
+    /// Arrival timestamp in microseconds since UNIX EPOCH.
+    pub timestamp_us: u64,
 }
 
 /// Type alias for the message bus sender.
@@ -69,6 +71,7 @@ mod tests {
             header: MavHeader::default(),
             message: Arc::new(MavMessage::HEARTBEAT(HEARTBEAT_DATA::default())),
             version: MavlinkVersion::V2,
+            timestamp_us: 0,
         };
 
         bus.send(msg.clone()).expect("Failed to send test message");

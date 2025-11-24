@@ -15,6 +15,7 @@ use anyhow::Result;
 use mavlink::{MavlinkVersion, Message};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -22,6 +23,7 @@ use tracing::{debug, error, trace, warn};
 use std::time::Duration;
 
 /// Exponential backoff helper for connection retries.
+#[derive(Debug)]
 pub struct ExponentialBackoff {
     current: Duration,
     min: Duration,
@@ -122,11 +124,18 @@ impl EndpointCore {
                 let mut rt = self.routing_table.write();
                 rt.update(self.id, frame.header.system_id, frame.header.component_id);
             }
+
+            let timestamp_us = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::from_secs(0))
+                .as_micros() as u64;
+
             if let Err(e) = self.bus_tx.send(RoutedMessage {
                 source_id: self.id,
                 header: frame.header,
                 message: Arc::new(frame.message),
                 version: frame.version,
+                timestamp_us,
             }) {
                 debug!("Bus send error: {}", e);
             }

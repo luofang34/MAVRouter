@@ -82,10 +82,8 @@ pub async fn run(
                         };
 
                         if res.is_ok() {
-                            let timestamp_us = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or(std::time::Duration::from_secs(0))
-                                .as_micros() as u64;
+                            // Use timestamp from RoutedMessage to avoid syscall per message
+                            let timestamp_us = msg.timestamp_us;
                             let ts_bytes = timestamp_us.to_be_bytes();
 
                             if let Err(e) = writer.write_all(&ts_bytes).await {
