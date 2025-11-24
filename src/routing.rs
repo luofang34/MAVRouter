@@ -40,7 +40,6 @@ pub struct RoutingStats {
 }
 
 impl RoutingTable {
-    #[allow(dead_code)] // Allow dead code for the entire impl block
     /// Creates a new, empty `RoutingTable`.
     pub fn new() -> Self {
         Self {
@@ -150,6 +149,7 @@ impl RoutingTable {
         self.sys_routes.retain(|_, v| now.duration_since(v.last_seen) < max_age);
     }
 
+    #[allow(dead_code)]
     /// Returns current statistics about the routing table.
     pub fn stats(&self) -> RoutingStats {
         RoutingStats {
