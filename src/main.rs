@@ -102,7 +102,6 @@ impl StatsHistory {
 struct AggregatedStats {
     avg_routes: f64,
     max_routes: usize,
-    #[allow(dead_code)]
     min_routes: usize,
     sample_count: usize,
 }
