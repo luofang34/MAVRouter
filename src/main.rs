@@ -469,8 +469,22 @@ mod tests {
         assert_eq!(history.samples.len(), 61); // Should retain samples 9 to 69 (61 samples)
 
         // Verify oldest remaining sample
-        assert_eq!(history.samples.front().unwrap().timestamp, 9);
-        assert_eq!(history.samples.back().unwrap().timestamp, 69);
+        assert_eq!(
+            history
+                .samples
+                .front()
+                .expect("History should not be empty")
+                .timestamp,
+            9
+        );
+        assert_eq!(
+            history
+                .samples
+                .back()
+                .expect("History should not be empty")
+                .timestamp,
+            69
+        );
 
         // Test push with 0 retention (effectively disabled)
         let mut history_zero_retention = StatsHistory::new(0);
@@ -497,7 +511,7 @@ mod tests {
         // Aggregate 3-second window (t2, t3, t4)
         // Values: 20, 30, 40, 50 (timestamps 1-4)
         // sum = 140, count = 4, avg = 35.0, min = 20, max = 50
-        let agg_3s = history.aggregate(3).unwrap();
+        let agg_3s = history.aggregate(3).expect("Aggregation should not be None");
         assert_eq!(agg_3s.sample_count, 4);
         assert_eq!(agg_3s.avg_routes, 35.0);
         assert_eq!(agg_3s.min_routes, 20);
@@ -506,7 +520,7 @@ mod tests {
         // Aggregate 5-second window (all samples)
         // Values: 10, 20, 30, 40, 50
         // sum = 150, count = 5, avg = 30.0, min = 10, max = 50
-        let agg_5s = history.aggregate(5).unwrap();
+        let agg_5s = history.aggregate(5).expect("Aggregation should not be None");
         assert_eq!(agg_5s.sample_count, 5);
         assert_eq!(agg_5s.avg_routes, 30.0);
         assert_eq!(agg_5s.min_routes, 10);
@@ -514,12 +528,16 @@ mod tests {
 
         // Aggregate a window before any samples
         assert!(history.aggregate(0).is_some()); // Latest sample's timestamp - 0 should include just the last one
-        let last_sample_agg = history.aggregate(0).unwrap(); // Should be only the last sample if 0-window is used as (latest - 0)
+        let last_sample_agg = history
+            .aggregate(0)
+            .expect("Aggregation for 0-window should not be None"); // Should be only the last sample if 0-window is used as (latest - 0)
         assert_eq!(last_sample_agg.sample_count, 1);
         assert_eq!(last_sample_agg.avg_routes, 50.0);
 
         // Aggregate a window larger than retention, should cover all
-        let agg_large = history.aggregate(100).unwrap();
+        let agg_large = history
+            .aggregate(100)
+            .expect("Aggregation for large window should not be None");
         assert_eq!(agg_large.sample_count, 5);
     }
 
