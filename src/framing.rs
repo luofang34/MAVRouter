@@ -58,10 +58,16 @@ impl StreamParser {
     ///
     /// * `data` - The byte slice to append.
     pub fn push(&mut self, data: &[u8]) {
-        // Clear buffer if adding new data would exceed the limit
-        if self.buffer.len() + data.len() > MAX_BUFFER_SIZE {
-            warn!("StreamParser buffer exceeded MAX_BUFFER_SIZE. Clearing buffer to prevent OOM.");
-            self.buffer.clear();
+        let new_len = self.buffer.len() + data.len();
+        if new_len > MAX_BUFFER_SIZE {
+            let overflow = new_len - MAX_BUFFER_SIZE;
+            warn!("StreamParser buffer full, dropping {} oldest bytes to make room", overflow);
+            
+            if overflow <= self.buffer.len() {
+                self.buffer.advance(overflow);
+            } else {
+                self.buffer.clear();
+            }
         }
         self.buffer.extend_from_slice(data);
     }
