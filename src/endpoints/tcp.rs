@@ -33,29 +33,6 @@ pub async fn run(
         filters: filters.clone(),
     };
 
-    // Note: TCP Server implementation logic is slightly different from Generic Stream because
-    // it broadcasts to ALL clients. The `EndpointCore` logic is per-client (1-to-1).
-    // However, `handle_connection` is 1-to-1.
-    // The SERVER Sender task (broadcasting to clients) must still exist if we want centralized sending?
-    // Currently `handle_connection` does both reading and writing for that client.
-    // If we use `run_stream_loop` for `handle_connection`, it works:
-    // It reads from client -> Bus.
-    // It reads from Bus -> Client.
-    // This effectively makes every client an "Endpoint instance" sharing ID?
-    // Yes. This is what my previous implementation did.
-    // So `run` just accepts and spawns `run_stream_loop`.
-    
-    // Wait, previous impl had a `sender_task` in `run` that wrote to `clients` map?
-    // Ah, yes. `tcp.rs` had a CENTRAL sender task.
-    // Why? To avoid N bus subscriptions?
-    // Broadcast channel handles N subscriptions efficiently.
-    // If we use `run_stream_loop` per client, each client subscribes to broadcast.
-    // This is simpler and likely fine for < 100 clients.
-    // It simplifies logic massively.
-    // Does it work? Yes. `broadcast` channel is designed for this.
-    
-    // So I will switch TCP Server to spawn `run_stream_loop` per client.
-    
     match mode {
         crate::config::EndpointMode::Server => {
             let listener = TcpListener::bind(&address).await
