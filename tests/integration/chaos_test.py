@@ -57,6 +57,7 @@ def test_buffer_overflow():
 def test_fd_exhaustion():
     print("\n[Chaos] Starting FD Exhaustion Test (200 connections)...")
     sockets = []
+    success = False
     try:
         for i in range(200):
             s = socket.create_connection((TARGET_IP, TARGET_PORT))
@@ -69,15 +70,23 @@ def test_fd_exhaustion():
         
         # Verify we can still connect one more and send data
         master = mavutil.mavlink_connection(f'tcp:{TARGET_IP}:{TARGET_PORT}')
-        master.wait_heartbeat(timeout=2)
-        print("[Chaos] Router still responsive with 200 clients.")
+        if master.wait_heartbeat(timeout=10):
+            print("[Chaos] Router still responsive with 200 clients.")
+            success = True
+        else:
+            print("[Chaos] Router failed to respond to heartbeat (timeout).")
+            success = False
         
     except Exception as e:
         print(f"[Chaos] FD Exhaustion hit limit (expected?) or crashed: {e}")
+        success = False
     finally:
         for s in sockets:
-            s.close()
-        return True
+            try:
+                s.close()
+            except:
+                pass
+        return success
 
 if __name__ == "__main__":
     if not test_slow_loris(): sys.exit(1)
