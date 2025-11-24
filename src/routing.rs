@@ -179,7 +179,6 @@ impl RoutingTable {
 mod tests {
     use super::*;
     use num_cpus;
-    use std::env;
     use std::time::Duration;
 
     fn stress_iterations() -> usize {
