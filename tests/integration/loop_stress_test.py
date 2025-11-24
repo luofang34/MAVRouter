@@ -3,12 +3,28 @@ import time
 import threading
 import os
 import multiprocessing
-from pymavlink import mavutil
+
+# --- Dependency Check ---
+try:
+    from pymavlink import mavutil
+except ImportError:
+    print("Error: pymavlink not installed. Please install it using:")
+    print("  pip install pymavlink")
+    print("Or from the project's requirements.txt:")
+    print("  pip install -r tests/integration/requirements.txt")
+    sys.exit(1)
 
 try:
     import psutil
 except ImportError:
     psutil = None
+    print("Warning: psutil not installed. Memory checks will be disabled.")
+    print("  To enable memory checks, please install it using:")
+    print("  pip install psutil")
+    print("Or from the project's requirements.txt:")
+    print("  pip install -r tests/integration/requirements.txt")
+
+# --- End Dependency Check ---
 
 # Configuration
 TARGET_IP = '127.0.0.1'
@@ -96,9 +112,6 @@ def run_load_round(round_name, duration, num_clients, msg_rate_per_client):
 
 def main():
     print("Starting High Load Loop Stress Test...")
-    
-    if not psutil:
-        print("⚠️  psutil not installed, memory checks disabled.")
 
     # Round 1: Warm-up (5s, 10 clients, 1000 msg/s total)
     # Reduced per-client rate to 100 to hit 1000 total
