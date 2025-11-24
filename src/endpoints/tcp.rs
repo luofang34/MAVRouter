@@ -141,7 +141,7 @@ pub async fn run(
                     }
                 }
 
-                let wait = backoff.next();
+                let wait = backoff.next_backoff();
                 tokio::select! {
                     _ = tokio::time::sleep(wait) => {},
                     _ = token.cancelled() => break,

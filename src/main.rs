@@ -469,7 +469,7 @@ where
             } => {}
         }
         
-        let wait = backoff.next();
+        let wait = backoff.next_backoff();
         info!("Supervisor: Waiting {:.1?} before restarting {}", wait, name);
         tokio::select! {
             _ = tokio::time::sleep(wait) => {},

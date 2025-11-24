@@ -50,7 +50,7 @@ impl ExponentialBackoff {
     ///
     /// The returned duration is the one that should be waited *now*. The internal
     /// state is updated to `current * multiplier` (capped at `max`) for the *next* call.
-    pub fn next(&mut self) -> Duration {
+    pub fn next_backoff(&mut self) -> Duration {
         let wait = self.current;
         self.current = std::cmp::min(
             self.max,
