@@ -20,27 +20,31 @@ if [ ! -f "config/mavrouter_test.toml" ]; then
 fi
 
 # Start Router
-nohup RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
-ROUTER_PID=$!
-echo "Router PID after initial spawn ($!): $ROUTER_PID"
+RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
+
+# Wait for router's TCP port to be open
+echo "Waiting for router TCP port 5760 to be available..."
+for i in $(seq 1 10); do
+    if nc -z 127.0.0.1 5760; then
+        echo "Router TCP port 5760 is open."
+        break
+    else
+        echo "Attempt $i: Router port not yet open, waiting..."
+        sleep 1
+    fi
+    if [ $i -eq 10 ]; then
+        echo "Error: Router TCP port 5760 did not become available within 10 seconds."
+        cat router_hw_val.log
+        exit 1
+    fi
+done
 
 # Cleanup trap
 cleanup() {
-    echo "Stopping Router (PID: $ROUTER_PID)..."
-    kill "$ROUTER_PID" 2>/dev/null || true
+    echo "Stopping Router (pkill)..."
+    pkill -f mavrouter-rs || true
 }
 trap cleanup EXIT
-
-# Wait for startup
-sleep 5
-echo "Status after sleep: $(ps -p $ROUTER_PID -o stat=)"
-
-# Verify Process is running
-if ! kill -0 "$ROUTER_PID" 2>/dev/null; then
-    echo "Router failed to start (process not alive or PID incorrect). Check router_hw_val.log"
-    cat router_hw_val.log
-    exit 1
-fi
 
 run_test() {
     local description="$1"
