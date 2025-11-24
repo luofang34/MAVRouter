@@ -12,7 +12,6 @@ def main():
         print("No heartbeat received!")
         sys.exit(1)
 
-    # Extract source from the message, not the master object (which might be default)
     src_sys = hb.get_srcSystem()
     src_comp = hb.get_srcComponent()
     print(f"Received Heartbeat from SysID {src_sys} CompID {src_comp}")
@@ -28,7 +27,7 @@ def main():
     # 2. Send Command
     target_comp = src_comp
     if target_comp == 0:
-        target_comp = 1 # Force Autopilot if unknown
+        target_comp = 1
 
     print(f"Sending MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES to {src_sys}/{target_comp}...")
     master.mav.command_long_send(
@@ -48,8 +47,6 @@ def main():
         if not msg:
             continue
             
-        # print(f"Debug: Received {msg.get_type()} from {msg.get_srcSystem()}/{msg.get_srcComponent()}")
-
         if msg.get_type() == 'AUTOPILOT_VERSION':
             print("SUCCESS: Received AUTOPILOT_VERSION!")
             sys.exit(0)

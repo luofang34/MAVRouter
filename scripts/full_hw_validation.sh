@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,13 +13,13 @@ echo "Starting Router for Hardware Validation..."
 pkill -f mavrouter-rs || true
 
 # Config check
-if [ ! -f "mavrouter_test.toml" ]; then
-    echo "Error: mavrouter_test.toml not found."
+if [ ! -f "config/mavrouter_test.toml" ]; then
+    echo "Error: config/mavrouter_test.toml not found."
     exit 1
 fi
 
 # Start Router
-RUST_LOG=info ./target/release/mavrouter-rs --config mavrouter_test.toml > router_hw_val.log 2>&1 &
+RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
 ROUTER_PID=$!
 
 # Cleanup trap
@@ -39,12 +39,12 @@ if ! kill -0 $ROUTER_PID 2>/dev/null; then
 fi
 
 echo "[1/3] Verifying Command/Response (TCP <-> Serial)..."
-python3 verify_tx.py
+python3 tests/integration/verify_tx.py
 
 echo "[2/3] Verifying Heartbeat Broadcast (UDP <-> Serial)..."
-python3 verify_udp.py
+python3 tests/integration/verify_udp.py
 
 echo "[3/3] Verifying Resilience (Fuzzing)..."
-python3 fuzz_test_strict.py
+python3 tests/integration/fuzz_test_strict.py
 
 echo "All Hardware Tests Passed."

@@ -1,14 +1,37 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Detects first available flight controller port
+# Supports Linux (/dev/ttyACM*, /dev/ttyUSB*) and macOS (/dev/tty.usbmodem*, /dev/tty.usbserial*)
 # Returns port path if found, exit 0
 # Returns empty if not found, exit 1
 
+OS="$(uname -s)"
 PORT=""
-if [ -e /dev/ttyACM0 ]; then
-    PORT="/dev/ttyACM0"
-elif [ -e /dev/ttyUSB0 ]; then
-    PORT="/dev/ttyUSB0"
-fi
+
+case "$OS" in
+    Linux)
+        # Check common Linux paths
+        for p in /dev/ttyACM* /dev/ttyUSB*; do
+            if [ -e "$p" ]; then
+                PORT="$p"
+                break
+            fi
+        done
+        ;;
+    Darwin)
+        # Check common macOS paths
+        for p in /dev/tty.usbmodem* /dev/tty.usbserial*; do
+            if [ -e "$p" ]; then
+                PORT="$p"
+                break
+            fi
+        done
+        ;;
+    *)
+        # Unknown OS, try both? Or just fail.
+        # Try Linux style as fallback
+        if [ -e /dev/ttyACM0 ]; then PORT="/dev/ttyACM0"; fi
+        ;;
+esac
 
 if [ -n "$PORT" ]; then
     echo "$PORT"
