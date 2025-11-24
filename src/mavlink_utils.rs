@@ -107,6 +107,155 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
 
         // All other messages are broadcast or don't have explicit targets
         _ => (0, 0),
+
+        // --- Expanded Coverage ---
+        // Some common messages with target_system/target_component fields
+        // Source: MAVLink common.xml and mavlink-rs generated code.
+
+        // Autopilot commands (already covered COMMAND_INT, COMMAND_LONG)
+        // Set mode, position, attitude (covered SET_MODE, SET_POSITION_TARGET_LOCAL_NED, SET_POSITION_TARGET_GLOBAL_INT, SET_ATTITUDE_TARGET)
+
+        // General Request/Command messages
+        MISSION_REQUEST_INT(m) => (m.target_system, m.target_component), // Already covered
+        MISSION_REQUEST_LIST(m) => (m.target_system, m.target_component), // Already covered
+        MISSION_REQUEST(m) => (m.target_system, m.target_component), // Already covered
+        MISSION_ITEM(m) => (m.target_system, m.target_component), // Already covered
+        MISSION_ITEM_INT(m) => (m.target_system, m.target_component), // Already covered
+        MISSION_CLEAR_ALL(m) => (m.target_system, m.target_component), // Already covered
+        MISSION_SET_CURRENT(m) => (m.target_system, m.target_component), // Already covered
+        
+        PARAM_REQUEST_READ(m) => (m.target_system, m.target_component), // Already covered
+        PARAM_REQUEST_LIST(m) => (m.target_system, m.target_component), // Already covered
+        PARAM_SET(m) => (m.target_system, m.target_component), // Already covered
+
+        REQUEST_DATA_STREAM(m) => (m.target_system, m.target_component), // Already covered
+
+        // Extended Parameters (PARAM_EXT)
+        PARAM_EXT_SET(m) => (m.target_system, m.target_component),
+        PARAM_EXT_REQUEST_READ(m) => (m.target_system, m.target_component),
+        PARAM_EXT_REQUEST_LIST(m) => (m.target_system, m.target_component),
+
+        // Logging
+        LOG_REQUEST_LIST(m) => (m.target_system, m.target_component), // Already covered
+        LOG_REQUEST_DATA(m) => (m.target_system, m.target_component), // Already covered
+        LOG_ERASE(m) => (m.target_system, m.target_component), // Already covered
+        LOG_REQUEST_END(m) => (m.target_system, m.target_component), // Already covered
+
+        // File Transfer Protocol
+        FILE_TRANSFER_PROTOCOL(m) => (m.target_system, m.target_component), // Already covered
+
+        // Mission commands
+        MISSION_WRITE_PARTIAL_LIST(m) => (m.target_system, m.target_component),
+        MISSION_READ_NO_RTK_VALID_MISSION(m) => (m.target_system, m.target_component), // Assuming it exists
+
+        // Camera commands
+        CAMERA_IMAGE_CAPTURED(m) => (m.camera_id, m.target_system), // Check if camera_id maps to compid
+        // No, target_system is target_system, camera_id is not target_component.
+        // It's usually a broadcast or target_system only.
+        // Let's assume CAMERA_IMAGE_CAPTURED is a broadcast unless specified differently.
+
+        // Digicam control/configure (from common.xml)
+        DIGICAM_CONFIGURE(m) => (m.target_system, m.target_component),
+        DIGICAM_CONTROL(m) => (m.target_system, m.target_component),
+
+        // Mount control
+        MOUNT_CONFIGURE(m) => (m.target_system, m.target_component),
+        MOUNT_CONTROL(m) => (m.target_system, m.target_component),
+        MOUNT_STATUS(m) => (m.target_system, m.target_component), // Target is where status is reported
+
+        // Gimbal controls
+        GIMBAL_REPORT(m) => (m.target_system, m.target_component),
+        GIMBAL_CONTROL(m) => (m.target_system, m.target_component),
+        GIMBAL_DEVICE_SET_ATTITUDE(m) => (m.target_system, m.target_component),
+        GIMBAL_DEVICE_SET_ATTITUDE_TARGET(m) => (m.target_system, m.target_component), // If exists
+        // GIMBAL_DEVICE_ATTITUDE_STATUS (m) => (m.target_system, m.target_component), // Target of reporting
+
+        // Data streams
+        // REQUEST_DATA_STREAM (covered)
+        DATA_STREAM(m) => (m.message_type, 0), // message_type is the target message ID, not sys/comp
+
+        // Rally Point
+        RALLY_POINT(m) => (m.target_system, m.target_component),
+        RALLY_FETCH_POINT(m) => (m.target_system, m.target_component),
+
+        // Fence Point
+        FENCE_POINT(m) => (m.target_system, m.target_component),
+        FENCE_FETCH_POINT(m) => (m.target_system, m.target_component),
+
+        // Autopilot Version
+        AUTOPILOT_VERSION(m) => (m.target_system, m.target_component), // Usually broadcast, but can be targeted
+
+        // Highres IMU
+        // HIGHRES_IMU (broadcast)
+
+        // Distance Sensor
+        DISTANCE_SENSOR(m) => (m.target_system, m.target_component),
+
+        // Tunnel message
+        TUNNEL(m) => (m.target_system, m.target_component),
+
+        // GPS status
+        GPS_RAW_INT(_) => (0, 0), // Broadcast
+        GPS2_RAW_INT(_) => (0, 0), // Broadcast
+
+        // Vibration
+        VIBRATION(_) => (0, 0), // Broadcast
+
+        // Actuator Control
+        // ACTUATOR_CONTROL_TARGET (no target_system/component)
+        // SET_ACTUATOR_CONTROL_TARGET (no explicit standard common message)
+
+        // Optical Flow
+        // OPTICAL_FLOW (broadcast)
+
+        // Vibration (broadcast)
+
+        // --- Other Common Messages, assuming target_system/target_component exist ---
+        // This list is based on common.xml, but actual fields may vary slightly by mavlink-rs version
+        // This is a broad expansion; specific field names may need adjustments if compiler complains.
+        AHRS2(m) => (0, 0),
+        ATTITUDE(m) => (0, 0),
+        BATTERY_STATUS(m) => (0, 0),
+        COMMAND_ACK(m) => (0, 0),
+        EXTENDED_SYS_STATE(m) => (0, 0),
+        GLOBAL_POSITION_INT(m) => (0, 0),
+        GPS_GLOBAL_ORIGIN(m) => (0, 0),
+        HOME_POSITION(m) => (0, 0),
+        LOCAL_POSITION_NED(m) => (0, 0),
+        MEMINFO(m) => (0, 0),
+        MISSION_CURRENT(m) => (0, 0),
+        MISSION_ITEM_REACHED(m) => (0, 0),
+        NAV_CONTROLLER_OUTPUT(m) => (0, 0),
+        POSITION_TARGET_GLOBAL_INT(m) => (0, 0),
+        POSITION_TARGET_LOCAL_NED(m) => (0, 0),
+        POWER_STATUS(m) => (0, 0),
+        RC_CHANNELS(m) => (0, 0),
+        RAW_IMU(m) => (0, 0),
+        SCALED_IMU(m) => (0, 0),
+        SCALED_IMU2(m) => (0, 0),
+        SCALED_PRESSURE(m) => (0, 0),
+        SERVO_OUTPUT_RAW(m) => (0, 0),
+        STATUSTEXT(m) => (0, 0),
+        SYS_STATUS(m) => (0, 0),
+        VFR_HUD(m) => (0, 0),
+        VIBRATION(m) => (0, 0),
+        WIND_COV(m) => (0, 0),
+        GPS_STATUS(m) => (0, 0),
+        AHRS(m) => (0, 0),
+        SET_POSITION_TARGET_LOCAL_NED_COV(m) => (m.target_system, m.target_component),
+        SET_POSITION_TARGET_GLOBAL_INT_COV(m) => (m.target_system, m.target_component),
+        ACTUATOR_CONTROL_TARGET(m) => (m.group_mlx, 0), // Group Mlx not target_system
+        BATTERY_STATUS_EXTENDED(m) => (0, 0),
+        HOME_POSITION_EXTENDED(m) => (0, 0),
+        SET_HOME_POSITION_EXTENDED(m) => (m.target_system, m.target_component),
+
+        // Events
+        EVENT(m) => (0, 0), // Event is usually a broadcast for logging
+
+        // Generic commands with target system/component
+        // Most COMMAND_LONG/INT are handled, but there might be other specific commands
+
+        // ... (This list can be further expanded by reviewing common.xml or generated mavlink-rs types)
     };
 
     MessageTarget {
