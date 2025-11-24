@@ -191,24 +191,21 @@ async fn main() -> Result<()> {
                         let mut stats = rt.stats();
                         drop(rt); // Release lock quickly
 
-                        // Add timestamp if not already set by routing (it is set now, but ensure consistency)
-                        // routing.rs stats() sets it, so we can use it directly or overwrite to be sure of sampling time.
-                        // Let's overwrite to capture "sample time" rather than "lock time" if slightly different,
-                        // though routing.rs uses SystemTime::now() too.
+                        // Ensure timestamp reflects sample time, even if already set in routing.rs
                         stats.timestamp = SystemTime::now()
                             .duration_since(UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs();
 
-                        history.push(stats.clone()); // Clone is cheap (3 usizes + u64)
+                        history.push(stats);
 
                         // Periodic logging
                         if stats.timestamp.saturating_sub(last_log_time) >= log_interval {
                             // 1 minute aggregation
                             if let Some(min1) = history.aggregate(60) {
                                 info!(
-                                    "Stats [1min] avg={:.1} routes, max={}",
-                                    min1.avg_routes, min1.max_routes
+                                    "Stats [1min] avg={:.1} routes, range=[{}-{}]",
+                                    min1.avg_routes, min1.min_routes, min1.max_routes
                                 );
                             }
 
@@ -437,5 +434,95 @@ where
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::routing::RoutingStats;
+
+    fn dummy_stats(routes: usize, systems: usize, endpoints: usize, timestamp: u64) -> RoutingStats {
+        RoutingStats {
+            total_routes: routes,
+            total_systems: systems,
+            total_endpoints: endpoints,
+            timestamp,
+        }
+    }
+
+    #[test]
+    fn test_stats_history_retention() {
+        let mut history = StatsHistory::new(60); // 1 minute retention
+
+        // Add 30 samples, 1 second apart
+        for i in 0..30 {
+            history.push(dummy_stats(i, i, i, i));
+        }
+        assert_eq!(history.samples.len(), 30);
+
+        // Add 40 more samples, total 70 samples. Max age is 60 secs.
+        // Expect samples 0-9 to be pruned.
+        for i in 30..70 {
+            history.push(dummy_stats(i, i, i, i));
+        }
+        assert_eq!(history.samples.len(), 60); // Should retain samples 10 to 69
+
+        // Verify oldest remaining sample
+        assert_eq!(history.samples.front().unwrap().timestamp, 10);
+        assert_eq!(history.samples.back().unwrap().timestamp, 69);
+
+        // Test push with 0 retention (effectively disabled)
+        let mut history_zero_retention = StatsHistory::new(0);
+        history_zero_retention.push(dummy_stats(1,1,1,1));
+        history_zero_retention.push(dummy_stats(2,2,2,2));
+        assert_eq!(history_zero_retention.samples.len(), 2, "0 retention should keep all for a while until actual cutoff");
+        // The cleanup logic will eventually prune if timestamp difference is greater than 0
+    }
+
+    #[test]
+    fn test_aggregate_window() {
+        let mut history = StatsHistory::new(100); // More than enough retention
+        
+        // Sample every second
+        // Routes: 10, 20, 30, 40, 50 (timestamps 0-4)
+        for i in 0..5 {
+            history.push(dummy_stats((i + 1) * 10, 0, 0, i));
+        }
+        // Current state: [t0:10, t1:20, t2:30, t3:40, t4:50]
+
+        // Aggregate 3-second window (t2, t3, t4)
+        // Values: 30, 40, 50
+        // sum = 120, count = 3, avg = 40.0, min = 30, max = 50
+        let agg_3s = history.aggregate(3).unwrap();
+        assert_eq!(agg_3s.sample_count, 3);
+        assert_eq!(agg_3s.avg_routes, 40.0);
+        assert_eq!(agg_3s.min_routes, 30);
+        assert_eq!(agg_3s.max_routes, 50);
+
+        // Aggregate 5-second window (all samples)
+        // Values: 10, 20, 30, 40, 50
+        // sum = 150, count = 5, avg = 30.0, min = 10, max = 50
+        let agg_5s = history.aggregate(5).unwrap();
+        assert_eq!(agg_5s.sample_count, 5);
+        assert_eq!(agg_5s.avg_routes, 30.0);
+        assert_eq!(agg_5s.min_routes, 10);
+        assert_eq!(agg_5s.max_routes, 50);
+
+        // Aggregate a window before any samples
+        assert!(history.aggregate(0).is_some()); // Latest sample's timestamp - 0 should include just the last one
+        let last_sample_agg = history.aggregate(0).unwrap(); // Should be only the last sample if 0-window is used as (latest - 0)
+        assert_eq!(last_sample_agg.sample_count, 1);
+        assert_eq!(last_sample_agg.avg_routes, 50.0);
+
+        // Aggregate a window larger than retention, should cover all
+        let agg_large = history.aggregate(100).unwrap();
+        assert_eq!(agg_large.sample_count, 5);
+    }
+
+    #[test]
+    fn test_empty_history_aggregation() {
+        let history = StatsHistory::new(60);
+        assert!(history.aggregate(60).is_none());
     }
 }
