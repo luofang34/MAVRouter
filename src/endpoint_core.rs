@@ -78,7 +78,7 @@ impl EndpointCore {
             if let Err(e) = self.bus_tx.send(RoutedMessage {
                 source_id: self.id,
                 header: frame.header,
-                message: frame.message,
+                message: Arc::new(frame.message),
                 version: frame.version,
             }) {
                 debug!("Bus send error: {}", e);
@@ -219,11 +219,11 @@ where
                                 continue;
                             }
 
-                            let mut buf = Vec::new();
-                            if let Err(e) = match msg.version {
-                                MavlinkVersion::V2 => mavlink::write_v2_msg(&mut buf, msg.header, &msg.message),
-                                MavlinkVersion::V1 => mavlink::write_v1_msg(&mut buf, msg.header, &msg.message),
-                            } {
+                    let mut buf = Vec::new();
+                    if let Err(e) = match msg.version {
+                        MavlinkVersion::V2 => mavlink::write_v2_msg(&mut buf, msg.header, &msg.message),
+                        MavlinkVersion::V1 => mavlink::write_v1_msg(&mut buf, msg.header, &msg.message),
+                    } {
                                 warn!("{} Serialize Error: {}", name, e);
                                 continue;
                             }

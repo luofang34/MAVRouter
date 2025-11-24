@@ -1,4 +1,5 @@
 use mavlink::{common::MavMessage, MavHeader, MavlinkVersion};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 /// A routed MAVLink message with source information.
@@ -9,7 +10,7 @@ pub struct RoutedMessage {
     /// MAVLink message header containing system_id, component_id, and sequence number.
     pub header: MavHeader,
     /// The actual MAVLink message payload.
-    pub message: MavMessage,
+    pub message: Arc<MavMessage>,
     /// The MAVLink protocol version used for this message (V1 or V2).
     pub version: MavlinkVersion,
 }
@@ -62,7 +63,7 @@ mod tests {
         let msg = RoutedMessage {
             source_id: 1,
             header: MavHeader::default(),
-            message: MavMessage::HEARTBEAT(HEARTBEAT_DATA::default()),
+            message: Arc::new(MavMessage::HEARTBEAT(HEARTBEAT_DATA::default())),
             version: MavlinkVersion::V2,
         };
 
