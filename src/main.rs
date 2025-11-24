@@ -77,10 +77,6 @@ impl StatsHistory {
         let latest = self.samples.back()?;
         let cutoff = latest.timestamp.saturating_sub(window_secs);
 
-        // In a real ring buffer we could optimize this, but iteration is fine for small N
-        // or even 86400 items (linear scan is fast in memory).
-        // Optimization: Find start index using binary search or reverse iterator if needed.
-        // For <100k items, iter is usually fine.
         let window: Vec<_> = self
             .samples
             .iter()
@@ -127,17 +123,15 @@ async fn run_stats_server(
     info!("Stats Query Interface listening on {}", socket_path);
 
     // Set permissions to allow anyone to query stats (if needed)
-    // In a real scenario, we might want to restrict this.
     let metadata = std::fs::metadata(path)?;
     let mut permissions = metadata.permissions();
-    permissions.set_mode(0o777);
+    permissions.set_mode(0o660); // Restrict to owner/group read/write
     std::fs::set_permissions(path, permissions)?;
 
     loop {
         tokio::select! {
             _ = token.cancelled() => {
                 info!("Stats Server shutting down.");
-                // Cleanup socket file
                 if path.exists() {
                     let _ = tokio::fs::remove_file(path).await;
                 }
@@ -159,10 +153,6 @@ async fn run_stats_server(
                                 "stats" => {
                                     let rt_guard = lock_read!(rt);
                                     let stats = rt_guard.stats();
-                                    // Manually format JSON to avoid serde_json dependency if possible,
-                                    // or just use format! macro for simple structure.
-                                    // Goal was <3KB impact and zero dependencies if possible.
-                                    // Let's stick to format! since structure is flat.
                                     format!(
                                         r#"{{"total_systems":{},"total_routes":{},"total_endpoints":{},"timestamp":{}}}"#,
                                         stats.total_systems,
