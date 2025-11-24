@@ -122,7 +122,6 @@ async fn run_stats_server(
     let listener = UnixListener::bind(path)?;
     info!("Stats Query Interface listening on {}", socket_path);
 
-    // Set permissions to allow anyone to query stats (if needed)
     let metadata = std::fs::metadata(path)?;
     let mut permissions = metadata.permissions();
     permissions.set_mode(0o660); // Restrict to owner/group read/write
