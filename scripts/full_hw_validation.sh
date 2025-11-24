@@ -21,31 +21,23 @@ fi
 
 # Start Router
 nohup RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
-
-# Wait for startup
-sleep 3
-# Find actual router PID
-ROUTER_PID=$(pgrep -f "mavrouter-rs --config config/mavrouter_test.toml")
+ROUTER_PID=$!
+echo "Router PID after initial spawn ($!): $ROUTER_PID"
 
 # Cleanup trap
 cleanup() {
     echo "Stopping Router (PID: $ROUTER_PID)..."
-    # Ensure PID is valid before killing
-    if [ -n "$ROUTER_PID" ]; then
-        kill "$ROUTER_PID" 2>/dev/null || true
-    fi
+    kill "$ROUTER_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-# Verify Process is running
-if [ -z "$ROUTER_PID" ]; then # Check if pgrep found anything
-    echo "Router failed to start (PID not found). Check router_hw_val.log"
-    cat router_hw_val.log
-    exit 1
-fi
+# Wait for startup
+sleep 5
+echo "Status after sleep: $(ps -p $ROUTER_PID -o stat=)"
 
-if ! kill -0 "$ROUTER_PID" 2>/dev/null; then # Check if found PID is still running
-    echo "Router failed to start (process died). Check router_hw_val.log"
+# Verify Process is running
+if ! kill -0 "$ROUTER_PID" 2>/dev/null; then
+    echo "Router failed to start (process not alive or PID incorrect). Check router_hw_val.log"
     cat router_hw_val.log
     exit 1
 fi
