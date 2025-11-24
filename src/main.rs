@@ -21,7 +21,7 @@ use crate::config::{Config, EndpointConfig};
 use crate::dedup::Dedup;
 use crate::endpoint_core::ExponentialBackoff;
 use crate::router::create_bus;
-use crate::routing::{RoutingStats, RoutingTable};
+use crate::routing::RoutingTable;
 use crate::stats::StatsHistory;
 use anyhow::Result;
 use clap::Parser;
