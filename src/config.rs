@@ -6,7 +6,7 @@ use crate::filter::EndpointFilters;
 
 /// Configuration for MAVLink router.
 ///
-/// Loaded from TOML file using [`Config::from_file`].
+/// Loaded from TOML file using [`Config::load`].
 ///
 /// # Example
 /// ```toml
