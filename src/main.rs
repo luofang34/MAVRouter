@@ -21,6 +21,7 @@ use crate::config::{Config, EndpointConfig};
 use crate::dedup::Dedup;
 use crate::router::create_bus;
 use crate::routing::RoutingTable;
+use crate::{lock_read, lock_write};
 use anyhow::Result;
 use clap::Parser;
 use parking_lot::{Mutex, RwLock};
@@ -84,6 +85,28 @@ async fn main() -> Result<()> {
                 _ = tokio::time::sleep(Duration::from_secs(prune_interval)) => {
                     let mut rt = lock_write!(rt_prune);
                     rt.prune(Duration::from_secs(prune_ttl));
+                }
+            }
+        }
+    }));
+
+    // Stats Reporting Task (runs every 10s)
+    let rt_stats = routing_table.clone();
+    let stats_token = cancel_token.child_token();
+    handles.push(tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = stats_token.cancelled() => {
+                    info!("Stats Reporter shutting down.");
+                    break;
+                }
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    let rt = lock_read!(rt_stats);
+                    let stats = rt.stats();
+                    info!(
+                        "Stats - Routes: {}, Systems: {}, Endpoints: {}",
+                        stats.total_routes, stats.total_systems, stats.total_endpoints
+                    );
                 }
             }
         }

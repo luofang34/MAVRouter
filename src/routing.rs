@@ -155,7 +155,6 @@ impl RoutingTable {
             .retain(|_, v| now.duration_since(v.last_seen) < max_age);
     }
 
-    #[allow(dead_code)]
     /// Returns current statistics about the routing table.
     pub fn stats(&self) -> RoutingStats {
         RoutingStats {
