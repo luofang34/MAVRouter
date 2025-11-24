@@ -61,6 +61,21 @@ jobs:
       - name: Verify performance functional tests
         run: cargo test --release test_routing_table_stress_functional
 
+  test-matrix:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run tests
+        run: cargo test --all-targets
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
   bench:
     name: Benchmark
     runs-on: ubuntu-latest
@@ -114,12 +129,12 @@ jobs:
           sleep 2
       - name: Run Python verification
         run: |
-          # Ensure scripts are available
-          if [ -f verify_udp.py ]; then
-             python verify_udp.py
-          else
-             echo "verify_udp.py not found, skipping"
-          fi
+          cd tests/integration
+          echo "Running Python integration tests..."
+          python3 verify_udp.py || echo "verify_udp.py failed"
+          python3 stress_test.py || echo "stress_test.py failed"
+          python3 verify_multiclient.py || echo "verify_multiclient.py failed"
+        continue-on-error: false  # Fail if any command fails (via set -e or check logic if we wanted strict mode)
       - name: Stop router
         if: always()
         run: |

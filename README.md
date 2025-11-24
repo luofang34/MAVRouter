@@ -1,5 +1,10 @@
 # mavrouter-rs
 
+[![CI](https://github.com/luofang34/mavrouter-rs/workflows/CI/badge.svg)](https://github.com/luofang34/mavrouter-rs/actions)
+[![crates.io](https://img.shields.io/crates/v/mavrouter-rs.svg)](https://crates.io/crates/mavrouter-rs)
+[![docs.rs](https://docs.rs/mavrouter-rs/badge.svg)](https://docs.rs/mavrouter-rs)
+[![License](https://img.shields.io/crates/l/mavrouter-rs.svg)](LICENSE)
+
 A MAVLink router for embedded systems. Focuses on reliability and performance.
 
 ## Features
