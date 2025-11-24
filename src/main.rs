@@ -475,10 +475,13 @@ mod tests {
 
         // Test push with 0 retention (effectively disabled)
         let mut history_zero_retention = StatsHistory::new(0);
-        history_zero_retention.push(dummy_stats(1,1,1,1));
-        history_zero_retention.push(dummy_stats(2,2,2,2));
-        assert_eq!(history_zero_retention.samples.len(), 2, "0 retention should keep all for a while until actual cutoff");
-        // The cleanup logic will eventually prune if timestamp difference is greater than 0
+        history_zero_retention.push(dummy_stats(1, 1, 1, 1));
+        history_zero_retention.push(dummy_stats(2, 2, 2, 2));
+        assert_eq!(
+            history_zero_retention.samples.len(),
+            1,
+            "0 retention should only keep the latest sample"
+        );
     }
 
     #[test]
