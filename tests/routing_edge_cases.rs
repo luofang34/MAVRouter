@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use mavrouter_rs::router::EndpointId;
 use mavrouter_rs::routing::RoutingTable;
 use parking_lot::RwLock;
