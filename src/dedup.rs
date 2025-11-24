@@ -4,7 +4,9 @@
 //! within a specified time window. It's useful for filtering out redundant
 //! retransmissions or messages generated too frequently by sources.
 
+use ahash::AHasher;
 use std::collections::{HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
 /// Implements message deduplication based on message payload and a time window.
@@ -17,7 +19,7 @@ pub struct Dedup {
     /// A history of messages seen, used for cleaning up expired entries.
     history: VecDeque<(Instant, u64)>,
     /// A set of hashes of recently seen messages for quick lookup.
-    set: HashSet<u64>,
+    set: HashSet<u64, ahash::RandomState>,
 }
 
 impl Dedup {
@@ -31,7 +33,7 @@ impl Dedup {
         Self {
             dedup_period,
             history: VecDeque::new(),
-            set: HashSet::new(),
+            set: HashSet::with_hasher(ahash::RandomState::new()),
         }
     }
 
@@ -65,13 +67,8 @@ impl Dedup {
             }
         }
 
-        // Calculate hash (using simple hasher for speed, standard Hash trait)
-        // C++ uses std::hash<std::string> on the buffer.
-        // We can use DefaultHasher.
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
+        // Calculate hash (using ahash for speed)
+        let mut hasher = AHasher::default();
         payload.hash(&mut hasher);
         let hash = hasher.finish();
 
