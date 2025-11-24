@@ -126,9 +126,6 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
         PLAY_TUNE(m) => (m.target_system, m.target_component),
         PLAY_TUNE_V2(m) => (m.target_system, m.target_component),
 
-        // Serial
-        SERIAL_CONTROL(m) => (m.target_system, m.target_component),
-
         // Tunnel
         TUNNEL(m) => (m.target_system, m.target_component),
 
@@ -138,7 +135,6 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
         // Gimbal Manager (Standard MAVLink)
         GIMBAL_MANAGER_SET_ATTITUDE(m) => (m.target_system, m.target_component),
         GIMBAL_MANAGER_SET_PITCHYAW(m) => (m.target_system, m.target_component),
-        GIMBAL_MANAGER_CONFIGURE(m) => (m.target_system, m.target_component),
     };
 
     MessageTarget {
