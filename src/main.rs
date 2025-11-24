@@ -221,8 +221,8 @@ async fn main() -> Result<()> {
                             if let Some(all) = history.aggregate(retention) {
                                 info!(
                                     "Stats [{}h] avg={:.1} routes, samples={}, systems={}, endpoints={}",
-                                    retention / 3600, 
-                                    all.avg_routes, 
+                                    retention / 3600,
+                                    all.avg_routes,
                                     all.sample_count,
                                     stats.total_systems,
                                     stats.total_endpoints
@@ -443,7 +443,12 @@ mod tests {
     use super::*;
     use crate::routing::RoutingStats;
 
-    fn dummy_stats(routes: usize, systems: usize, endpoints: usize, timestamp: u64) -> RoutingStats {
+    fn dummy_stats(
+        routes: usize,
+        systems: usize,
+        endpoints: usize,
+        timestamp: u64,
+    ) -> RoutingStats {
         RoutingStats {
             total_routes: routes,
             total_systems: systems,
@@ -501,7 +506,7 @@ mod tests {
     #[test]
     fn test_aggregate_window() {
         let mut history = StatsHistory::new(100); // More than enough retention
-        
+
         // Sample every second
         // Routes: 10, 20, 30, 40, 50 (timestamps 0-4)
         for i in 0..5 {
@@ -512,7 +517,9 @@ mod tests {
         // Aggregate 3-second window (t2, t3, t4)
         // Values: 20, 30, 40, 50 (timestamps 1-4)
         // sum = 140, count = 4, avg = 35.0, min = 20, max = 50
-        let agg_3s = history.aggregate(3).expect("Aggregation should not be None");
+        let agg_3s = history
+            .aggregate(3)
+            .expect("Aggregation should not be None");
         assert_eq!(agg_3s.sample_count, 4);
         assert_eq!(agg_3s.avg_routes, 35.0);
         assert_eq!(agg_3s.min_routes, 20);
@@ -521,7 +528,9 @@ mod tests {
         // Aggregate 5-second window (all samples)
         // Values: 10, 20, 30, 40, 50
         // sum = 150, count = 5, avg = 30.0, min = 10, max = 50
-        let agg_5s = history.aggregate(5).expect("Aggregation should not be None");
+        let agg_5s = history
+            .aggregate(5)
+            .expect("Aggregation should not be None");
         assert_eq!(agg_5s.sample_count, 5);
         assert_eq!(agg_5s.avg_routes, 30.0);
         assert_eq!(agg_5s.min_routes, 10);
