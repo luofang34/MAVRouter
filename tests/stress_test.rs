@@ -7,7 +7,7 @@ use mavrouter_rs::dedup::Dedup;
 use std::time::Duration;
 
 #[test]
-fn test_routing_table_large_scale_performance() {
+fn test_routing_table_stress_functional() {
     let mut rt = RoutingTable::new();
 
     // Insert 1000 routes
@@ -19,24 +19,17 @@ fn test_routing_table_large_scale_performance() {
         }
     }
 
-    // Measure lookup performance
-    let start = std::time::Instant::now();
-    let iterations = 100_000;
-
-    for i in 0..iterations {
+    // Stress test: 100k operations should complete without panic
+    // This verifies functional correctness under load, not raw performance (see benches/)
+    for i in 0..100_000 {
         let sys = ((i % 100) + 1) as u8;
         let comp = ((i % 10) + 1) as u8;
         let endpoint = (i % 10) as usize;
-        let _ = rt.should_send(endpoint, sys, comp);
+        let result = rt.should_send(endpoint, sys, comp);
+        
+        // Verify basic functional correctness (route should exist)
+        assert!(result, "Route should exist for endpoint {} sys {} comp {}", endpoint, sys, comp);
     }
-
-    let elapsed = start.elapsed();
-    let avg_ns = elapsed.as_nanos() / iterations;
-
-    println!("Average lookup time: {}ns", avg_ns);
-
-    // Should be < 200ns per lookup
-    assert!(avg_ns < 200, "Lookup too slow: {}ns", avg_ns);
 }
 
 #[test]

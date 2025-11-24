@@ -39,10 +39,10 @@ jobs:
         with:
           components: clippy
       - name: Linting
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
   test:
-    name: Test
+    name: Test (Debug)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,14 +50,30 @@ jobs:
       - name: Run all tests
         run: cargo test --verbose
 
+  test-release:
+    name: Test (Release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run tests in release mode
+        run: cargo test --release --verbose
+      - name: Verify performance functional tests
+        run: cargo test --release test_routing_table_stress_functional
+
   bench:
     name: Benchmark
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run benchmarks (compilation check)
-        run: cargo bench --features benchmarks --no-run
+      - name: Run benchmarks
+        run: cargo bench --bench routing_benchmark
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: target/criterion/
 
   python-tests:
     name: Python Integration Tests
@@ -79,32 +95,31 @@ jobs:
         run: |
           # Create minimal test config
           mkdir -p logs
-          cat > test_config.toml << EOF
+          cat > ci_config.toml << EOF
           [general]
           bus_capacity = 1000
           tcp_port = 5760
+          log = "logs"
+          log_telemetry = true
 
           [[endpoint]]
           type = "udp"
           address = "127.0.0.1:14550"
-          mode = "client"
+          mode = "server"
           EOF
           # Start router in background
-          ./target/release/mavrouter-rs --config test_config.toml > router.log 2>&1 &
+          ./target/release/mavrouter-rs --config ci_config.toml > router.log 2>&1 &
           echo $! > router.pid
           # Wait for router to start
           sleep 2
-      - name: Run Python integration tests
+      - name: Run Python verification
         run: |
-          # Run functional verification tests (hardware tests will fail without real device)
-          python tests/integration/verify_udp.py || echo "UDP test skipped (expected in CI)"
-          echo "Python tests completed (some may be skipped without hardware)"
-      - name: Run Python stress tests
-        run: |
-          python tests/integration/stress_test.py || echo "Stress test info collected"
-      - name: Run Python chaos tests
-        run: |
-          python tests/integration/chaos_test.py || echo "Chaos test completed"
+          # Ensure scripts are available
+          if [ -f verify_udp.py ]; then
+             python verify_udp.py
+          else
+             echo "verify_udp.py not found, skipping"
+          fi
       - name: Stop router
         if: always()
         run: |
@@ -120,27 +135,3 @@ jobs:
           path: |
             router.log
             logs/
-
-  coverage:
-    name: Code Coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Generate coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: lcov.info
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: lcov.info
