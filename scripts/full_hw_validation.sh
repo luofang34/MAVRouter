@@ -11,7 +11,7 @@ cargo build --release --quiet
 
 echo "Starting Router for Full Hardware Validation..."
 # Kill any existing instances
-pkill -f mavrouter-rs || true
+pkill -f "target/release/mavrouter-rs" || true
 
 # Config check
 if [ ! -f "config/mavrouter_test.toml" ]; then
@@ -42,7 +42,7 @@ done
 # Cleanup trap
 cleanup() {
     echo "Stopping Router (pkill)..."
-    pkill -f mavrouter-rs || true
+    pkill -f "target/release/mavrouter-rs" || true
 }
 trap cleanup EXIT
 
