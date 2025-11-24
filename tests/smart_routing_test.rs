@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 //! End-to-end routing tests
 //! 
@@ -96,7 +97,8 @@ async fn test_targeted_message_routing() {
     // Wait for routing table to learn and drain heartbeats
     tokio::time::sleep(Duration::from_millis(300)).await;
     
-    // Drain initial broadcasts from client buffers
+    // Drain initial broadcasts from ALL clients
+    while client1.try_read(&mut [0u8; 1024]).is_ok() {}
     while client2.try_read(&mut [0u8; 1024]).is_ok() {}
     while client3.try_read(&mut [0u8; 1024]).is_ok() {}
 
@@ -127,7 +129,6 @@ async fn test_targeted_message_routing() {
     // Step 3: Verify routing
 
     // Client 2 SHOULD receive (targeted to sys 2)
-    // We might receive hearbeats still? No, clients only sent once.
     let (header, msg) = read_mavlink_message(&mut client2).await.expect("Client 2 should receive message");
     
     assert_eq!(header.system_id, 1, "Source is system 1");
@@ -136,23 +137,27 @@ async fn test_targeted_message_routing() {
     // Client 3 should NOT receive (not targeted)
     tokio::time::sleep(Duration::from_millis(500)).await;
     let result3 = client3.try_read(&mut [0u8; 1024]);
-    // Should be empty (WouldBlock) or 0
     if let Ok(n) = result3 {
         assert_eq!(n, 0, "Client 3 should NOT receive message targeted to sys 2");
+    }
+    
+    // Client 1 should NOT receive (it's the sender)
+    let result1 = client1.try_read(&mut [0u8; 1024]);
+    if let Ok(n) = result1 {
+        assert_eq!(n, 0, "Client 1 should not receive its own message");
     }
 }
 
 #[tokio::test]
 #[serial]
 async fn test_unknown_target_dropped() {
-    // ... (Same as before) ...
-    // Copying existing test body to ensure full file validity
     let bus = create_bus(100);
     let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
     let dedup = Arc::new(Mutex::new(Dedup::new(Duration::from_millis(0))));
     let filters = EndpointFilters::default();
     let token = CancellationToken::new();
 
+    // Only 1 endpoint
     let bus_tx = bus.clone();
     let bus_rx = bus.subscribe();
     tokio::spawn({
@@ -173,16 +178,20 @@ async fn test_unknown_target_dropped() {
     let mut client = TcpStream::connect("127.0.0.1:16010").await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
+    // Client announces as system 1
     let hb = MavHeader { system_id: 1, component_id: 1, sequence: 0 };
-    let msg = mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
+    let msg = mavlink::common::MavMessage::HEARTBEAT(
+        mavlink::common::HEARTBEAT_DATA::default()
+    );
     let mut buf = Vec::new();
     mavlink::write_v2_msg(&mut buf, hb, &msg).unwrap();
     client.write_all(&buf).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 
+    // Send command to UNKNOWN system 200
     let cmd = mavlink::common::COMMAND_LONG_DATA {
-        target_system: 200,  
+        target_system: 200,  // ← Unknown!
         target_component: 1,
         command: mavlink::common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
         confirmation: 0,
@@ -196,14 +205,21 @@ async fn test_unknown_target_dropped() {
     };
     let cmd_header = MavHeader { system_id: 1, component_id: 1, sequence: 1 };
     let mut cmd_buf = Vec::new();
-    mavlink::write_v2_msg(&mut cmd_buf, cmd_header, &mavlink::common::MavMessage::COMMAND_LONG(cmd)).unwrap();
+    mavlink::write_v2_msg(
+        &mut cmd_buf,
+        cmd_header,
+        &mavlink::common::MavMessage::COMMAND_LONG(cmd)
+    ).unwrap();
 
     client.write_all(&cmd_buf).await.unwrap();
 
+    // Wait and verify no message comes back
     tokio::time::sleep(Duration::from_millis(500)).await;
     
     let mut discard = [0u8; 1024];
-    if let Ok(n) = client.try_read(&mut discard) {
-        assert_eq!(n, 0, "Message to unknown system should be dropped");
+    let result = client.try_read(&mut discard);
+
+    if let Ok(n) = result {
+        assert_eq!(n, 0, "Message to unknown system should be dropped/not echoed");
     }
 }
