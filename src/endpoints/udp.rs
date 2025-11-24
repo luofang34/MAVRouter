@@ -164,20 +164,30 @@ pub async fn run(
                         warn!("UDP Serialize Error: {}", e);
                         continue;
                     }
+                    
+                    let packet_data = Arc::new(buf);
 
                     if let Some(target) = target_addr {
-                        if let Err(e) = s_socket.send_to(&buf, target).await {
-                            warn!("UDP send error to target: {}", e);
-                        }
+                        let s = s_socket.clone();
+                        let p = packet_data.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = s.send_to(&p, target).await {
+                                warn!("UDP send error to target: {}", e);
+                            }
+                        });
                     } else {
                         let targets: Vec<SocketAddr> = {
                             let guard = clients_send.lock();
                             guard.keys().cloned().collect()
                         };
                         for client in targets {
-                            if let Err(e) = s_socket.send_to(&buf, client).await {
-                                warn!("UDP broadcast error to {}: {}", client, e);
-                            }
+                            let s = s_socket.clone();
+                            let p = packet_data.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = s.send_to(&p, client).await {
+                                    warn!("UDP broadcast error to {}: {}", client, e);
+                                }
+                            });
                         }
                     }
                 }
