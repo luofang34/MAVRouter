@@ -3,6 +3,7 @@
 //! Stress and reliability tests
 
 use mavrouter_rs::dedup::Dedup;
+use mavrouter_rs::router::EndpointId;
 use mavrouter_rs::routing::RoutingTable;
 use std::env;
 use std::time::Duration;
@@ -36,7 +37,7 @@ fn test_routing_table_stress_functional() {
     for endpoint in 0..10 {
         for sys in 1..=100 {
             for comp in 1..=10 {
-                rt.update(endpoint, sys, comp);
+                rt.update(EndpointId(endpoint), sys, comp);
             }
         }
     }
@@ -49,7 +50,7 @@ fn test_routing_table_stress_functional() {
         let sys = ((i % 100) + 1) as u8;
         let comp = ((i % 10) + 1) as u8;
         let endpoint = i % 10;
-        let result = rt.should_send(endpoint, sys, comp);
+        let result = rt.should_send(EndpointId(endpoint), sys, comp);
 
         // Verify basic functional correctness (route should exist)
         assert!(
@@ -99,7 +100,7 @@ async fn test_routing_table_concurrent_access() {
         handles.push(tokio::spawn(async move {
             for j in 0..100 {
                 let mut rt_lock = rt_clone.write();
-                rt_lock.update(i, (j % 255) as u8, 1);
+                rt_lock.update(EndpointId(i), (j % 255) as u8, 1);
             }
         }));
     }
@@ -110,7 +111,7 @@ async fn test_routing_table_concurrent_access() {
         handles.push(tokio::spawn(async move {
             for j in 0..100 {
                 let rt_lock = rt_clone.read();
-                let _ = rt_lock.should_send(0, (j % 255) as u8, 1);
+                let _ = rt_lock.should_send(EndpointId(0), (j % 255) as u8, 1);
             }
         }));
     }

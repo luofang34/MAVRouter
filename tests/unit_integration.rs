@@ -4,7 +4,7 @@ use mavlink::{MavHeader, MavlinkVersion};
 use mavrouter_rs::dedup::Dedup;
 use mavrouter_rs::endpoint_core::{run_stream_loop, EndpointCore};
 use mavrouter_rs::filter::EndpointFilters;
-use mavrouter_rs::router::{create_bus, RoutedMessage};
+use mavrouter_rs::router::{create_bus, EndpointId, RoutedMessage};
 use mavrouter_rs::routing::RoutingTable;
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
@@ -24,7 +24,7 @@ async fn test_stream_loopback() {
     let bus_rx = bus.subscribe();
 
     let core = EndpointCore {
-        id: 1,
+        id: EndpointId(1),
         bus_tx,
         routing_table,
         dedup,
@@ -54,12 +54,12 @@ async fn test_stream_loopback() {
 
     let mut bus_rx_check = bus.subscribe();
     let received = bus_rx_check.recv().await.unwrap();
-    assert_eq!(received.source_id, 1);
+    assert_eq!(received.source_id, EndpointId(1));
     assert_eq!(received.header.system_id, 1);
 
     // Test: Send to Bus (Output from Endpoint) -> Read from Client
     let msg_out = RoutedMessage {
-        source_id: 2, // From another endpoint
+        source_id: EndpointId(2), // From another endpoint
         header: MavHeader {
             system_id: 2,
             component_id: 1,
