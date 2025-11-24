@@ -83,7 +83,7 @@ run_test "Ping Storm (Throughput)" "tests/integration/stress_test.py" 60 false
 
 echo "=== Tier 3: Resilience & Chaos (Allowed to Fail) ==="
 # Chaos and Fuzz tests are allowed to fail or timeout without breaking the build
-run_test "Fuzzing (Malicious Payload)" "tests/integration/fuzz_test_strict.py" 60 true
+run_test "Fuzzing (Malicious Payload)" "tests/integration/fuzz_test.py" 60 true
 run_test "Chaos (Slow Loris, FD Exhaustion)" "tests/integration/chaos_test.py" 120 true
 
 echo "========================================"
