@@ -105,9 +105,6 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
         // File transfer
         FILE_TRANSFER_PROTOCOL(m) => (m.target_system, m.target_component),
 
-        // All other messages are broadcast or don't have explicit targets
-        _ => (0, 0),
-
         // --- Expanded Coverage (Verified Common Messages) ---
         
         // Extended Parameters
@@ -135,6 +132,9 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
         // Gimbal Manager (Standard MAVLink)
         GIMBAL_MANAGER_SET_ATTITUDE(m) => (m.target_system, m.target_component),
         GIMBAL_MANAGER_SET_PITCHYAW(m) => (m.target_system, m.target_component),
+
+        // All other messages are broadcast or don't have explicit targets
+        _ => (0, 0),
     };
 
     MessageTarget {
