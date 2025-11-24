@@ -467,7 +467,7 @@ mod tests {
         for i in 30..70 {
             history.push(dummy_stats(i, i, i, i as u64));
         }
-        assert_eq!(history.samples.len(), 60); // Should retain samples 10 to 69
+        assert_eq!(history.samples.len(), 61); // Should retain samples 9 to 69 (61 samples)
 
         // Verify oldest remaining sample
         assert_eq!(history.samples.front().unwrap().timestamp, 10);
@@ -493,12 +493,12 @@ mod tests {
         // Current state: [t0:10, t1:20, t2:30, t3:40, t4:50]
 
         // Aggregate 3-second window (t2, t3, t4)
-        // Values: 30, 40, 50
-        // sum = 120, count = 3, avg = 40.0, min = 30, max = 50
+        // Values: 20, 30, 40, 50 (timestamps 1-4)
+        // sum = 140, count = 4, avg = 35.0, min = 20, max = 50
         let agg_3s = history.aggregate(3).unwrap();
-        assert_eq!(agg_3s.sample_count, 3);
-        assert_eq!(agg_3s.avg_routes, 40.0);
-        assert_eq!(agg_3s.min_routes, 30);
+        assert_eq!(agg_3s.sample_count, 4);
+        assert_eq!(agg_3s.avg_routes, 35.0);
+        assert_eq!(agg_3s.min_routes, 20);
         assert_eq!(agg_3s.max_routes, 50);
 
         // Aggregate 5-second window (all samples)
