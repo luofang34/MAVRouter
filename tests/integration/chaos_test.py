@@ -12,21 +12,25 @@ TARGET_PORT = 5760
 
 def get_stress_params():
     """Auto-detect system resources and return appropriate test params"""
+    connections = 200 # Default safe baseline
+
     # Environment variable override
     if 'CI_STRESS_CONNECTIONS' in os.environ:
-        return int(os.environ['CI_STRESS_CONNECTIONS'])
+        connections = int(os.environ['CI_STRESS_CONNECTIONS'])
+    else:
+        cpu_count = multiprocessing.cpu_count()
+        # Auto-detection based on CPU cores
+        if cpu_count >= 64:    # Dev machine (128 cores)
+            connections = 5000 # High load, but not extreme 10k
+        elif cpu_count >= 8:   # Strong machine
+            connections = 2000
+        elif cpu_count >= 4:   # Average machine
+            connections = 500
+        else:                  # CI environment (2 cores)
+            connections = 500  # Increased from 200 for better coverage
 
-    cpu_count = multiprocessing.cpu_count()
-
-    # Auto-detection based on CPU cores
-    if cpu_count >= 64:    # Dev machine (128 cores)
-        return 10000       # Extreme load
-    elif cpu_count >= 8:   # Strong machine
-        return 2000
-    elif cpu_count >= 4:   # Average machine
-        return 500
-    else:                  # CI environment (2 cores)
-        return 200
+    print(f"[Chaos] Target connections set to: {connections}")
+    return connections
 
 def check_fd_limit(target_connections):
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)

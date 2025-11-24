@@ -135,7 +135,7 @@ jobs:
         run: |
           cd tests/integration
           echo "Running Python integration tests..."
-          for test in verify_udp.py stress_test.py verify_multiclient.py chaos_test.py fuzz_test.py; do
+          for test in verify_udp.py stress_test.py verify_multiclient.py chaos_test.py fuzz_test.py throughput_test.py mixed_load_test.py; do
             echo "Running $test..."
             timeout 120 python3 "$test" || echo "⚠️ $test failed (acceptable)"
           done
