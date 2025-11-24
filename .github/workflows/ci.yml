@@ -41,15 +41,6 @@ jobs:
       - name: Linting
         run: cargo clippy --all-targets -- -D warnings
 
-  test:
-    name: Test (Debug)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Run all tests
-        run: cargo test --verbose
-
   test-release:
     name: Test (Release)
     runs-on: ubuntu-latest
@@ -58,8 +49,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run tests in release mode
         run: cargo test --release --verbose
-      - name: Verify performance functional tests
-        run: cargo test --release test_routing_table_stress_functional
 
   test-matrix:
     name: Test (${{ matrix.os }})
@@ -70,20 +59,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --all-targets
-      - run: cargo clippy --all-targets -- -D warnings
-
-  docs:
-    name: Documentation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Check docs build
-        run: cargo doc --no-deps --all-features
-      - name: Check missing docs (warnings)
-        run: RUSTDOCFLAGS="-D missing_docs" cargo doc --no-deps --all-features
-        continue-on-error: true
+      - name: Run tests
+        run: cargo test --all-targets
 
   docs-check:
     name: Documentation Check
@@ -91,9 +68,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Check documentation builds without warnings
-        run: |
-          RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+      - name: Check docs build
+        run: cargo doc --no-deps --all-features
+      - name: Check missing docs (deny)
+        run: RUSTDOCFLAGS="-D missing_docs" cargo doc --no-deps --all-features
       - name: Check for broken intra-doc links
         run: |
           cargo rustdoc --lib -- -D rustdoc::broken_intra_doc_links
@@ -108,9 +86,8 @@ jobs:
         run: cargo bench --bench routing_benchmark
       - name: Check for regression (Basic)
         run: |
-          # Simple check to ensure benchmarks run without error and produce output
+          # Verify benchmarks run successfully
           cargo bench --bench routing_benchmark -- --test
-        continue-on-error: true
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
@@ -158,9 +135,9 @@ jobs:
         run: |
           cd tests/integration
           echo "Running Python integration tests..."
-          for test in verify_udp.py stress_test.py verify_multiclient.py; do
+          for test in verify_udp.py stress_test.py verify_multiclient.py chaos_test.py fuzz_test.py; do
             echo "Running $test..."
-            timeout 60 python3 "$test" || echo "⚠️ $test failed (acceptable)"
+            timeout 120 python3 "$test" || echo "⚠️ $test failed (acceptable)"
           done
         continue-on-error: false
       - name: Stop router
