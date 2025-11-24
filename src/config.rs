@@ -4,36 +4,36 @@ use anyhow::{Context, Result};
 use tokio::fs;
 use crate::filter::EndpointFilters;
 
-//! Configuration for MAVLink router.
-//!
-//! Loaded from TOML file using [`Config::from_file`].
-//!
-//! # Example
-//! ```toml
-//! [general]
-//! tcp_port = 5760
-//! dedup_period_ms = 100
-//! log = "logs"
-//! log_telemetry = true
-//! bus_capacity = 1000
-//! routing_table_ttl_secs = 300
-//! routing_table_prune_interval_secs = 60
-//!
-//! [[endpoint]]
-//! type = "serial"
-//! device = "/dev/ttyACM0"
-//! baud = 115200
-//!
-//! [[endpoint]]
-//! type = "udp"
-//! address = "0.0.0.0:14550"
-//! mode = "server"
-//!
-//! [[endpoint]]
-//! type = "tcp"
-//! address = "127.0.0.1:5761"
-//! mode = "client"
-//! ```
+/// Configuration for MAVLink router.
+///
+/// Loaded from TOML file using [`Config::from_file`].
+///
+/// # Example
+/// ```toml
+/// [general]
+/// tcp_port = 5760
+/// dedup_period_ms = 100
+/// log = "logs"
+/// log_telemetry = true
+/// bus_capacity = 1000
+/// routing_table_ttl_secs = 300
+/// routing_table_prune_interval_secs = 60
+///
+/// [[endpoint]]
+/// type = "serial"
+/// device = "/dev/ttyACM0"
+/// baud = 115200
+///
+/// [[endpoint]]
+/// type = "udp"
+/// address = "0.0.0.0:14550"
+/// mode = "server"
+///
+/// [[endpoint]]
+/// type = "tcp"
+/// address = "127.0.0.1:5761"
+/// mode = "client"
+/// ```
 #[derive(Debug, Deserialize)]
 pub struct Config {
     /// General router configuration.
@@ -44,7 +44,7 @@ pub struct Config {
     pub endpoint: Vec<EndpointConfig>,
 }
 
-//! General router configuration.
+/// General router configuration.
 #[derive(Debug, Deserialize, Default)]
 pub struct GeneralConfig {
     /// Optional TCP server port for general GCS connections.
