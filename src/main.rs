@@ -21,7 +21,6 @@ use crate::config::{Config, EndpointConfig};
 use crate::dedup::Dedup;
 use crate::router::create_bus;
 use crate::routing::RoutingTable;
-use crate::{lock_read, lock_write};
 use anyhow::Result;
 use clap::Parser;
 use parking_lot::{Mutex, RwLock};
