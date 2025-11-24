@@ -11,7 +11,7 @@
 use crate::dedup::Dedup;
 use crate::endpoint_core::{run_stream_loop, EndpointCore};
 use crate::filter::EndpointFilters;
-use crate::router::RoutedMessage;
+use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use anyhow::{Context, Result};
 use parking_lot::{Mutex, RwLock};
@@ -23,86 +23,18 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-struct ExponentialBackoff {
-    current: Duration,
-    min: Duration,
-    max: Duration,
-    multiplier: f64,
-}
+// ... (impl ExponentialBackoff ...)
 
-impl ExponentialBackoff {
-    fn new(min: Duration, max: Duration, multiplier: f64) -> Self {
-        Self {
-            current: min,
-            min,
-            max,
-            multiplier,
-        }
-    }
-
-    fn next(&mut self) -> Duration {
-        let wait = self.current;
-        self.current = std::cmp::min(
-            self.max,
-            Duration::from_secs_f64(self.current.as_secs_f64() * self.multiplier),
-        );
-        wait
-    }
-
-    fn reset(&mut self) {
-        self.current = self.min;
-    }
-}
-
-/// Runs the TCP endpoint logic, continuously handling connections based on the specified mode.
-///
-/// This function sets up a TCP server or client and manages incoming/outgoing
-/// MAVLink traffic through the provided message bus. It automatically retries
-/// connections in client mode and gracefully handles multiple client connections
-/// in server mode.
-///
-/// # Arguments
-///
-/// * `id` - Unique identifier for this endpoint.
-/// * `address` - The TCP address to bind to (server) or connect to (client), e.g., "0.0.0.0:5760" or "127.0.0.1:5761".
-/// * `mode` - The operating mode (`EndpointMode::Server` or `EndpointMode::Client`).
-/// * `bus_tx` - Sender half of the message bus for sending `RoutedMessage`s to other endpoints.
-/// * `bus_rx` - Receiver half of the message bus for receiving `RoutedMessage`s from other endpoints.
-/// * `routing_table` - Shared `RoutingTable` to update and query routing information.
-/// * `dedup` - Shared `Dedup` instance for message deduplication.
-/// * `filters` - `EndpointFilters` to apply for this specific endpoint.
-/// * `token` - `CancellationToken` to signal graceful shutdown.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure. The function will run indefinitely
-/// until the `CancellationToken` is cancelled or a critical error occurs.
-///
-/// # Errors
-///
-/// Returns an `anyhow::Error` if:
-/// - Binding to the specified address in server mode fails.
-/// - An unrecoverable error occurs during connection establishment in client mode.
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-    id: usize,
-    address: String,
-    mode: crate::config::EndpointMode,
-    bus_tx: broadcast::Sender<RoutedMessage>,
-    bus_rx: broadcast::Receiver<RoutedMessage>,
-    routing_table: Arc<RwLock<RoutingTable>>,
-    dedup: Arc<Mutex<Dedup>>,
-    filters: EndpointFilters,
-    token: CancellationToken,
+// ... (pub async fn run ...)
 ) -> Result<()> {
     let core = EndpointCore {
-        id,
+        id: EndpointId(id),
         bus_tx: bus_tx.clone(),
         routing_table: routing_table.clone(),
         dedup: dedup.clone(),
         filters: filters.clone(),
     };
-
+// ...
     match mode {
         crate::config::EndpointMode::Server => {
             let listener = TcpListener::bind(&address)

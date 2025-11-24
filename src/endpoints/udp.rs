@@ -12,7 +12,7 @@ use crate::dedup::Dedup;
 use crate::endpoint_core::EndpointCore;
 use crate::filter::EndpointFilters;
 use crate::framing::MavlinkFrame;
-use crate::router::RoutedMessage;
+use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use anyhow::{Context, Result};
 use mavlink::MavlinkVersion;
@@ -71,7 +71,7 @@ pub async fn run(
     token: CancellationToken,
 ) -> Result<()> {
     let core = EndpointCore {
-        id,
+        id: EndpointId(id),
         bus_tx: bus_tx.clone(),
         routing_table: routing_table.clone(),
         dedup: dedup.clone(),

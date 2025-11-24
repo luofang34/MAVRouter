@@ -8,7 +8,7 @@
 use crate::dedup::Dedup;
 use crate::endpoint_core::{run_stream_loop, EndpointCore};
 use crate::filter::EndpointFilters;
-use crate::router::RoutedMessage;
+use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use anyhow::{Context, Result};
 use parking_lot::{Mutex, RwLock};
@@ -62,7 +62,7 @@ pub async fn run(
     token: CancellationToken,
 ) -> Result<()> {
     let core = EndpointCore {
-        id,
+        id: EndpointId(id),
         bus_tx: bus_tx.clone(),
         routing_table: routing_table.clone(),
         dedup: dedup.clone(),
