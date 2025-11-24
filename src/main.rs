@@ -470,7 +470,7 @@ mod tests {
         assert_eq!(history.samples.len(), 61); // Should retain samples 9 to 69 (61 samples)
 
         // Verify oldest remaining sample
-        assert_eq!(history.samples.front().unwrap().timestamp, 10);
+        assert_eq!(history.samples.front().unwrap().timestamp, 9);
         assert_eq!(history.samples.back().unwrap().timestamp, 69);
 
         // Test push with 0 retention (effectively disabled)
