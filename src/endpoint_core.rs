@@ -120,7 +120,7 @@ impl EndpointCore {
         if !should_send && target.system_id != 0 {
             // Don't log dropped broadcast as "no route"
             trace!(
-                endpoint_id = self.id,
+                endpoint_id = self.id.0,
                 target_sys = target.system_id,
                 target_comp = target.component_id,
                 msg_id = msg.message.message_id(),
