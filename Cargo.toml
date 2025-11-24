@@ -2,8 +2,22 @@
 name = "mavrouter-rs"
 version = "0.1.0"
 edition = "2021"
-authors = ["Gemini Agent <agent@gemini.com>"]
-description = "A high-performance, async MAVLink router written in Rust"
+authors = ["Fang Luo <luofang@luofang.org>"]
+description = "A MAVLink router written in Rust"
+license = "GPL-3.0"
+repository = "https://github.com/luofang34/mavrouter-rs"
+homepage = "https://github.com/luofang34/mavrouter-rs"
+documentation = "https://docs.rs/mavrouter-rs"
+readme = "README.md"
+keywords = ["mavlink", "router", "telemetry"]
+categories = ["network-programming"]
+exclude = [
+    "logs/*",
+    "*.log",
+    "test_config.toml",
+    "router.pid",
+    ".github/*",
+]
 
 [dependencies]
 parking_lot = "0.12"
