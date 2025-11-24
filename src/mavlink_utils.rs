@@ -129,9 +129,6 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
         PARAM_EXT_REQUEST_READ(m) => (m.target_system, m.target_component),
         PARAM_EXT_REQUEST_LIST(m) => (m.target_system, m.target_component),
 
-        // Mission - additional
-        MISSION_WRITE_PARTIAL_LIST(m) => (m.target_system, m.target_component),
-
         // Logging
         LOGGING_DATA(m) => (m.target_system, m.target_component),
         LOGGING_DATA_ACKED(m) => (m.target_system, m.target_component),
