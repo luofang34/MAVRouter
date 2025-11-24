@@ -197,10 +197,11 @@ async fn main() -> Result<()> {
                             .unwrap_or_default()
                             .as_secs();
 
+                        let current_timestamp = stats.timestamp; // Capture timestamp before move
                         history.push(stats);
 
                         // Periodic logging
-                        if stats.timestamp.saturating_sub(last_log_time) >= log_interval {
+                        if current_timestamp.saturating_sub(last_log_time) >= log_interval {
                             // 1 minute aggregation
                             if let Some(min1) = history.aggregate(60) {
                                 info!(
@@ -457,14 +458,14 @@ mod tests {
 
         // Add 30 samples, 1 second apart
         for i in 0..30 {
-            history.push(dummy_stats(i, i, i, i));
+            history.push(dummy_stats(i, i, i, i as u64));
         }
         assert_eq!(history.samples.len(), 30);
 
         // Add 40 more samples, total 70 samples. Max age is 60 secs.
         // Expect samples 0-9 to be pruned.
         for i in 30..70 {
-            history.push(dummy_stats(i, i, i, i));
+            history.push(dummy_stats(i, i, i, i as u64));
         }
         assert_eq!(history.samples.len(), 60); // Should retain samples 10 to 69
 
@@ -487,7 +488,7 @@ mod tests {
         // Sample every second
         // Routes: 10, 20, 30, 40, 50 (timestamps 0-4)
         for i in 0..5 {
-            history.push(dummy_stats((i + 1) * 10, 0, 0, i));
+            history.push(dummy_stats((i + 1) * 10, 0, 0, i as u64));
         }
         // Current state: [t0:10, t1:20, t2:30, t3:40, t4:50]
 
