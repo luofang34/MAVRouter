@@ -93,7 +93,7 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
         PING(m) => (m.target_system, m.target_component),
 
         // Change operator control
-        CHANGE_OPERATOR_CONTROL(m) => (m.target_system, m.control_request),
+        CHANGE_OPERATOR_CONTROL(m) => (m.target_system, 0),      // Broadcast to all components
         CHANGE_OPERATOR_CONTROL_ACK(m) => (m.gcs_system_id, 0), // Ack to GCS
 
         // Logging
