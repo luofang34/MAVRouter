@@ -9,7 +9,7 @@ use crate::dedup::Dedup;
 use crate::filter::EndpointFilters;
 use crate::framing::{MavlinkFrame, StreamParser};
 use crate::mavlink_utils::extract_target;
-use crate::router::RoutedMessage;
+use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use anyhow::Result;
 use mavlink::{MavlinkVersion, Message};
@@ -28,7 +28,7 @@ use tracing::{debug, error, trace, warn};
 #[derive(Clone)]
 pub struct EndpointCore {
     /// Unique identifier for this endpoint.
-    pub id: usize,
+    pub id: EndpointId,
     /// Sender half of the global message bus for publishing incoming messages.
     pub bus_tx: broadcast::Sender<RoutedMessage>,
     /// Shared routing table for learning and querying MAVLink network topology.

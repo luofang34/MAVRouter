@@ -2,11 +2,15 @@ use mavlink::{common::MavMessage, MavHeader, MavlinkVersion};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
+/// Unique identifier for a routing endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EndpointId(pub usize);
+
 /// A routed MAVLink message with source information.
 #[derive(Clone, Debug)]
 pub struct RoutedMessage {
     /// Identifier of the source endpoint that received this message.
-    pub source_id: usize,
+    pub source_id: EndpointId,
     /// MAVLink message header containing system_id, component_id, and sequence number.
     pub header: MavHeader,
     /// The actual MAVLink message payload.
@@ -61,7 +65,7 @@ mod tests {
         let mut rx = bus.subscribe();
 
         let msg = RoutedMessage {
-            source_id: 1,
+            source_id: EndpointId(1),
             header: MavHeader::default(),
             message: Arc::new(MavMessage::HEARTBEAT(HEARTBEAT_DATA::default())),
             version: MavlinkVersion::V2,
@@ -70,6 +74,6 @@ mod tests {
         bus.send(msg.clone()).expect("Failed to send test message");
 
         let received = rx.recv().await.expect("Failed to receive test message");
-        assert_eq!(received.source_id, 1);
+        assert_eq!(received.source_id, EndpointId(1));
     }
 }

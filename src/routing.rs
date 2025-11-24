@@ -1,3 +1,4 @@
+use crate::router::EndpointId;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -5,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// or just a system_id. It tracks which endpoints have seen this MAVLink entity.
 struct RouteEntry {
     /// Set of endpoint IDs that have seen this MAVLink entity.
-    endpoints: HashSet<usize>,
+    endpoints: HashSet<EndpointId>,
     /// The last time this entry was updated or a message was seen from this entity.
     last_seen: Instant,
 }
@@ -61,7 +62,7 @@ impl RoutingTable {
     /// * `endpoint_id` - The ID of the endpoint where the message was received.
     /// * `sysid` - The MAVLink system ID of the message sender.
     /// * `compid` - The MAVLink component ID of the message sender.
-    pub fn update(&mut self, endpoint_id: usize, sysid: u8, compid: u8) {
+    pub fn update(&mut self, endpoint_id: EndpointId, sysid: u8, compid: u8) {
         let now = Instant::now();
 
         self.routes
@@ -113,7 +114,7 @@ impl RoutingTable {
     /// # Returns
     ///
     /// `true` if the message should be sent to `endpoint_id`, `false` otherwise.
-    pub fn should_send(&self, endpoint_id: usize, target_sysid: u8, target_compid: u8) -> bool {
+    pub fn should_send(&self, endpoint_id: EndpointId, target_sysid: u8, target_compid: u8) -> bool {
         if target_sysid == 0 {
             // MAV_BROADCAST_SYSTEM_ID
             return true;
@@ -159,7 +160,7 @@ impl RoutingTable {
     /// Returns current statistics about the routing table.
     pub fn stats(&self) -> RoutingStats {
         // Efficiently count unique endpoints
-        let mut unique_endpoints: HashSet<usize> = HashSet::new();
+        let mut unique_endpoints: HashSet<EndpointId> = HashSet::new();
         for entry in self.sys_routes.values() {
             unique_endpoints.extend(&entry.endpoints);
         }
@@ -205,13 +206,13 @@ mod tests {
     #[test]
     fn test_routing_table_basic_learning() {
         let mut rt = RoutingTable::new();
-        rt.update(1, 100, 1);
+        rt.update(EndpointId(1), 100, 1);
 
-        assert!(rt.should_send(1, 100, 0));
-        assert!(rt.should_send(1, 100, 1));
+        assert!(rt.should_send(EndpointId(1), 100, 0));
+        assert!(rt.should_send(EndpointId(1), 100, 1));
         // Unknown component on known system -> Fallback (True)
-        assert!(rt.should_send(1, 100, 2));
-        assert!(!rt.should_send(2, 100, 0));
+        assert!(rt.should_send(EndpointId(1), 100, 2));
+        assert!(!rt.should_send(EndpointId(2), 100, 0));
     }
 
     #[test]
@@ -220,39 +221,39 @@ mod tests {
 
         // Endpoint 1 sees sys 100 comp 1
         // Endpoint 2 sees sys 100 comp 2
-        rt.update(1, 100, 1);
-        rt.update(2, 100, 2);
+        rt.update(EndpointId(1), 100, 1);
+        rt.update(EndpointId(2), 100, 2);
 
         // System-wide (comp=0) goes to both
-        assert!(rt.should_send(1, 100, 0));
-        assert!(rt.should_send(2, 100, 0));
+        assert!(rt.should_send(EndpointId(1), 100, 0));
+        assert!(rt.should_send(EndpointId(2), 100, 0));
 
         // Component-specific routes to exact match
         // E.g. (100, 1) is known on Endpoint 1. Should ONLY go to 1?
         // Yes, because `routes.get` succeeds.
-        assert!(rt.should_send(1, 100, 1));
+        assert!(rt.should_send(EndpointId(1), 100, 1));
         // Does Endpoint 2 receive (100, 1)?
         // `routes.get(100, 1)` exists -> {1}.
         // `comp_entry.endpoints.contains(2)` -> False.
         assert!(
-            !rt.should_send(2, 100, 1),
+            !rt.should_send(EndpointId(2), 100, 1),
             "Strict routing for known component"
         );
 
-        assert!(rt.should_send(2, 100, 2));
+        assert!(rt.should_send(EndpointId(2), 100, 2));
         assert!(
-            !rt.should_send(1, 100, 2),
+            !rt.should_send(EndpointId(1), 100, 2),
             "Strict routing for known component"
         );
 
         // Unknown component (100, 3) on known system: FALLBACK
         // Both endpoints know system 100.
         assert!(
-            rt.should_send(1, 100, 3),
+            rt.should_send(EndpointId(1), 100, 3),
             "New component, fallback to sys route"
         );
         assert!(
-            rt.should_send(2, 100, 3),
+            rt.should_send(EndpointId(2), 100, 3),
             "New component, fallback to sys route"
         );
     }
@@ -263,41 +264,41 @@ mod tests {
 
         // Endpoint 1: autopilot on sys 100
         // Endpoint 2: autopilot on sys 200
-        rt.update(1, 100, 1);
-        rt.update(2, 200, 1);
+        rt.update(EndpointId(1), 100, 1);
+        rt.update(EndpointId(2), 200, 1);
 
         // Message to sys 100 should ONLY go to endpoint 1
-        assert!(rt.should_send(1, 100, 0));
-        assert!(!rt.should_send(2, 100, 0));
+        assert!(rt.should_send(EndpointId(1), 100, 0));
+        assert!(!rt.should_send(EndpointId(2), 100, 0));
 
         // Message to sys 200 should ONLY go to endpoint 2
-        assert!(!rt.should_send(1, 200, 0));
-        assert!(rt.should_send(2, 200, 0));
+        assert!(!rt.should_send(EndpointId(1), 200, 0));
+        assert!(rt.should_send(EndpointId(2), 200, 0));
     }
 
     #[test]
     fn test_broadcast_always_sends() {
         let mut rt = RoutingTable::new();
-        rt.update(1, 100, 1);
-        assert!(rt.should_send(1, 0, 0));
-        assert!(rt.should_send(999, 0, 0));
+        rt.update(EndpointId(1), 100, 1);
+        assert!(rt.should_send(EndpointId(1), 0, 0));
+        assert!(rt.should_send(EndpointId(999), 0, 0));
     }
 
     #[test]
     fn test_unknown_system_no_route() {
         let mut rt = RoutingTable::new();
-        rt.update(1, 100, 1);
-        assert!(!rt.should_send(1, 200, 0));
+        rt.update(EndpointId(1), 100, 1);
+        assert!(!rt.should_send(EndpointId(1), 200, 0));
     }
 
     #[test]
     fn test_pruning() {
         let mut rt = RoutingTable::new();
-        rt.update(1, 100, 1);
-        assert!(rt.should_send(1, 100, 0));
+        rt.update(EndpointId(1), 100, 1);
+        assert!(rt.should_send(EndpointId(1), 100, 0));
         std::thread::sleep(Duration::from_millis(50));
         rt.prune(Duration::from_millis(10));
-        assert!(!rt.should_send(1, 100, 0));
+        assert!(!rt.should_send(EndpointId(1), 100, 0));
     }
 
     #[test]
@@ -308,7 +309,7 @@ mod tests {
         // Simulate updates with churn
         for i in 0..iterations {
             // Endpoint ID 1-100 rotating
-            let endpoint = i % 100;
+            let endpoint = EndpointId(i % 100);
             // System ID 1-250 rotating
             let sys = ((i % 250) + 1) as u8;
             // Component ID 1-250 rotating
