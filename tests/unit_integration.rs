@@ -65,7 +65,7 @@ async fn test_stream_loopback() {
             component_id: 1,
             ..Default::default()
         },
-        message: mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default()),
+        message: Arc::new(mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default())),
         version: MavlinkVersion::V2,
     };
     bus.send(msg_out).unwrap();
