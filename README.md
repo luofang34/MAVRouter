@@ -87,39 +87,3 @@ cargo test
 # Full validation (before release, runs hardware tests if connected)
 ./scripts/pre_release_check.sh
 ```
-
-### Publishing a Release
-
-This project uses [cargo-release](https://github.com/crate-ci/cargo-release) for releases.
-
-#### Install cargo-release (once)
-
-```bash
-cargo install cargo-release
-```
-
-#### Release workflow
-
-```bash
-# 1. Dry-run (includes hardware tests if FC connected)
-cargo release --dry-run
-
-# 2. Bump version and create release
-cargo release patch  # or: minor, major
-
-# 3. Push to GitHub
-git push --follow-tags
-
-# 4. Publish to crates.io
-cargo publish
-```
-
-#### Skip hardware tests (emergency releases)
-
-```bash
-# If flight controller is not available
-SKIP_HW_TEST=1 cargo release --dry-run
-SKIP_HW_TEST=1 cargo release patch
-```
-
-Note: Hardware tests are recommended before any release.
