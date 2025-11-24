@@ -6,7 +6,6 @@
 //! Run with: cargo test --test message_filtering
 
 use std::time::Duration;
-use tokio::time::timeout;
 
 /// Test filtering with empty filters (all messages pass)
 #[tokio::test]
