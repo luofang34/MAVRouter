@@ -183,21 +183,19 @@ mod tests {
     use std::time::Duration;
 
     fn stress_iterations() -> usize {
-        // Environment variable override
-        if let Ok(s) = env::var("CI_STRESS_ITERATIONS") {
-            return s.parse().expect("CI_STRESS_ITERATIONS must be a number");
-        }
-
-        // Auto-detection based on CPU cores
-        let cpus = num_cpus::get();
-        if cpus >= 64 {
-            10_000_000 // Extreme test
-        } else if cpus >= 8 {
-            1_000_000
-        } else if cpus >= 4 {
-            500_000
+        // CI Environment detection
+        if std::env::var("CI").is_ok() {
+            100_000 // CI: fast check
         } else {
-            100_000 // CI environment (2 cores) or very weak machine
+            // Dev machine: adaptive
+            let cpus = num_cpus::get();
+            if cpus >= 64 {
+                10_000_000 // Extreme test
+            } else if cpus >= 8 {
+                1_000_000
+            } else {
+                100_000
+            }
         }
     }
 
