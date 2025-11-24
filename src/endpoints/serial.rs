@@ -141,7 +141,9 @@ async fn open_and_run(
         .with_context(|| format!("Failed to open serial port {}", device))?;
 
     #[cfg(unix)]
-    port.set_exclusive(false).ok();
+    if let Err(e) = port.set_exclusive(false) {
+        warn!("Failed to set exclusive mode on {}: {}", device, e);
+    }
 
     info!("Serial endpoint opened at {} baud", baud);
 
