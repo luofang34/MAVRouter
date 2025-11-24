@@ -77,24 +77,45 @@ impl StatsHistory {
         let latest = self.samples.back()?;
         let cutoff = latest.timestamp.saturating_sub(window_secs);
 
-        let window: Vec<_> = self
-            .samples
-            .iter()
-            .filter(|s| s.timestamp >= cutoff)
-            .collect();
+        // Optimization: Use binary search (partition_point) to find the start index
+        // because timestamps are strictly monotonically increasing.
+        // partition_point returns the index of the first element where the predicate is false.
+        // Predicate: timestamp < cutoff.
+        // So it finds the first element where timestamp >= cutoff.
+        let start_idx = self.samples.partition_point(|s| s.timestamp < cutoff);
 
-        if window.is_empty() {
+        // If start_idx is equal to len, it means no samples met the criteria (all were < cutoff)
+        // effectively window is empty relative to the cutoff, but wait...
+        // If we have samples [10, 20, 30] and cutoff is 40.
+        // 10<40 T, 20<40 T, 30<40 T. partition_point returns 3 (len).
+        // range(3..) is empty. Correct.
+        // If cutoff is 20.
+        // 10<20 T, 20<20 F. partition_point returns 1.
+        // range(1..) gives [20, 30]. Correct.
+
+        if start_idx >= self.samples.len() {
             return None;
         }
 
-        let sum_routes: usize = window.iter().map(|s| s.total_routes).sum();
-        let avg_routes = sum_routes as f64 / window.len() as f64;
+        let window = self.samples.range(start_idx..);
+        let window_len = self.samples.len() - start_idx;
+
+        if window_len == 0 {
+            return None;
+        }
+
+        let sum_routes: usize = window.clone().map(|s| s.total_routes).sum();
+        let avg_routes = sum_routes as f64 / window_len as f64;
+
+        // We can use the iterator directly for min/max
+        let max_routes = window.clone().map(|s| s.total_routes).max()?;
+        let min_routes = window.clone().map(|s| s.total_routes).min()?;
 
         Some(AggregatedStats {
             avg_routes,
-            max_routes: window.iter().map(|s| s.total_routes).max()?,
-            min_routes: window.iter().map(|s| s.total_routes).min()?,
-            sample_count: window.len(),
+            max_routes,
+            min_routes,
+            sample_count: window_len,
         })
     }
 }
