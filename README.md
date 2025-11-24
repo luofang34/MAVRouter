@@ -1,68 +1,46 @@
 # mavrouter-rs
 
-A high-performance, reliable, and safe MAVLink router written in Rust. Designed for embedded, unattended systems (Linux/PX4 companions).
+A MAVLink router for embedded systems. Focuses on reliability and performance.
 
 ## Features
 
 *   **Protocols**: Serial, UDP (Server/Client), TCP (Server/Client).
 *   **Reliability**:
-    *   **Supervisor Pattern**: Auto-restarts endpoints on failure.
-    *   **Leak-Free**: Managed resources using RAII and `JoinSet`.
-    *   **Safe**: 100% Safe Rust (`#![deny(unsafe_code)]`), strict linting.
-    *   **Lock-Free**: Uses `parking_lot` (no lock poisoning).
+    *   **Supervisor Pattern**: Endpoint task restart on failure.
+    *   **Resource Management**: Efficient handling of system resources.
+    *   **Safety**: Pure Rust implementation, strict linting.
+    *   **Concurrency**: Uses `parking_lot` for robust synchronization.
 *   **Routing**:
-    *   Intelligent Loop Prevention.
-    *   Deduplication (Time-based).
-    *   System ID / Component ID routing (with Pruning).
-    *   Message Filtering (Allow/Block lists).
+    *   Intelligent routing based on MAVLink target IDs.
+    *   Loop prevention mechanisms.
+    *   Time-based message deduplication.
+    *   Message filtering per endpoint.
 *   **Logging**:
-    *   High-throughput TLog recording (compatible with Mission Planner/QGC).
-    *   Graceful shutdown ensures log integrity.
+    *   TLog recording for MAVLink traffic.
+    *   Graceful shutdown behavior.
 
 ## Architecture
 
 ### Intelligent Routing
 
-MAVRouter learns network topology automatically:
-
-1. **Learning Phase**: When message arrives from endpoint A with source system_id=100
-   → Router records: "System 100 is reachable via endpoint A"
-
-2. **Routing Phase**: When routing message targeted to system_id=100
-   → Router sends ONLY to endpoints that have seen system 100
-
-**Example Topology:**
-```text
-┌─────────┐         ┌──────────┐         ┌────────────┐
-│   GCS   │◄───UDP──►│  Router  │◄──Serial─►│ Autopilot │
-│ (Sys 255│         │          │         │  (Sys 1)   │
-└─────────┘         └────┬─────┘         └────────────┘
-                         │
-                       TCP
-                         │
-                    ┌────▼────┐
-                    │Companion│
-                    │(Sys 100)│
-                    └─────────┘
-```
+MAVRouter learns network topology to route messages efficiently.
 
 **Routing Decisions:**
-- GCS→COMMAND(target=1): Only to Autopilot (Serial) ✅
-- Autopilot→HEARTBEAT(broadcast): To GCS + Companion ✅
-- Companion→PARAM_SET(target=1): Only to Autopilot ✅
-- Unknown target: Dropped (no route) ✅
+- Messages targeted to known systems/components are routed to specific endpoints.
+- Broadcast messages are routed to all relevant endpoints.
+- Messages to unknown targets are dropped.
+- Loop prevention is implemented.
 
-### Performance
+## Performance
 
-Designed for embedded systems:
+Designed for embedded environments.
 
-| Operation | Latency | Throughput |
-|-----------|---------|------------|
-| Route lookup | ~50ns | 20M ops/sec |
-| Message routing | <1µs | 1M msg/sec |
-| Target extraction | ~2ns | 500M ops/sec |
-
-**Stress tested:** 10,000 msg/sec sustained, 100 clients.
+| Operation         | Latency    |
+|-------------------|------------|
+| Route lookup      | ~50ns      |
+| Target extraction | ~2ns       |
+| Routing Update    | ~100ns     |
+| Pruning (1000 entries) | ~2.8µs  |
 
 ## Usage
 
@@ -72,7 +50,7 @@ cargo build --release
 ```
 
 ### Configuration
-Create `mavrouter.toml`:
+Example `mavrouter.toml`:
 
 ```toml
 [general]
@@ -106,8 +84,8 @@ mode = "server"
 # Run unit tests
 cargo test
 
-# Full validation (before release, runs hardware tests)
-./scripts/full_hw_validation.sh
+# Full validation (before release, runs hardware tests if connected)
+./scripts/pre_release_check.sh
 ```
 
 ### Publishing a Release
@@ -144,4 +122,4 @@ SKIP_HW_TEST=1 cargo release --dry-run
 SKIP_HW_TEST=1 cargo release patch
 ```
 
-Note: Hardware tests are strongly recommended before any release.
+Note: Hardware tests are recommended before any release.
