@@ -230,7 +230,7 @@ async fn main() -> Result<()> {
                                 );
                             }
 
-                            last_log_time = stats.timestamp;
+                            last_log_time = current_timestamp;
                         }
                     }
                 }
