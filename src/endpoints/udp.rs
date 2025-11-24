@@ -154,10 +154,10 @@ pub async fn run(
                     let mut buf = Vec::new();
                     if let Err(e) = match msg.version {
                         MavlinkVersion::V2 => {
-                            mavlink::write_v2_msg(&mut buf, msg.header, &msg.message)
+                            mavlink::write_v2_msg(&mut buf, msg.header, &*msg.message)
                         }
                         MavlinkVersion::V1 => {
-                            mavlink::write_v1_msg(&mut buf, msg.header, &msg.message)
+                            mavlink::write_v1_msg(&mut buf, msg.header, &*msg.message)
                         }
                     } {
                         warn!("UDP Serialize Error: {}", e);

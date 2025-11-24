@@ -159,7 +159,7 @@ impl RoutingTable {
     /// Returns current statistics about the routing table.
     pub fn stats(&self) -> RoutingStats {
         // Efficiently count unique endpoints
-        let mut unique_endpoints = HashSet::new();
+        let mut unique_endpoints: HashSet<usize> = HashSet::new();
         for entry in self.sys_routes.values() {
             unique_endpoints.extend(&entry.endpoints);
         }

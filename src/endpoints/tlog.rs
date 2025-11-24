@@ -77,8 +77,8 @@ pub async fn run(
                     Ok(msg) => {
                         let mut buf = Vec::new();
                         let res = match msg.version {
-                             MavlinkVersion::V2 => mavlink::write_v2_msg(&mut buf, msg.header, &msg.message),
-                             MavlinkVersion::V1 => mavlink::write_v1_msg(&mut buf, msg.header, &msg.message),
+                             MavlinkVersion::V2 => mavlink::write_v2_msg(&mut buf, msg.header, &*msg.message),
+                             MavlinkVersion::V1 => mavlink::write_v1_msg(&mut buf, msg.header, &*msg.message),
                         };
 
                         if res.is_ok() {
