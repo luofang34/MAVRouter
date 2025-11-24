@@ -16,11 +16,43 @@ use crate::routing::RoutingTable;
 use anyhow::{Context, Result};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+
+struct ExponentialBackoff {
+    current: Duration,
+    min: Duration,
+    max: Duration,
+    multiplier: f64,
+}
+
+impl ExponentialBackoff {
+    fn new(min: Duration, max: Duration, multiplier: f64) -> Self {
+        Self {
+            current: min,
+            min,
+            max,
+            multiplier,
+        }
+    }
+
+    fn next(&mut self) -> Duration {
+        let wait = self.current;
+        self.current = std::cmp::min(
+            self.max,
+            Duration::from_secs_f64(self.current.as_secs_f64() * self.multiplier),
+        );
+        wait
+    }
+
+    fn reset(&mut self) {
+        self.current = self.min;
+    }
+}
 
 /// Runs the TCP endpoint logic, continuously handling connections based on the specified mode.
 ///
@@ -107,6 +139,12 @@ pub async fn run(
         }
         crate::config::EndpointMode::Client => {
             info!("Connecting to TCP server at {}", address);
+            let mut backoff = ExponentialBackoff::new(
+                Duration::from_secs(1),
+                Duration::from_secs(60),
+                2.0,
+            );
+
             loop {
                 if token.is_cancelled() {
                     break;
@@ -115,6 +153,7 @@ pub async fn run(
                 match TcpStream::connect(&address).await {
                     Ok(stream) => {
                         info!("Connected to {}", address);
+                        backoff.reset();
                         let (read, write) = tokio::io::split(stream);
                         let name = format!("TCP Client {}", address);
                         let _ = run_stream_loop(
@@ -126,15 +165,16 @@ pub async fn run(
                             name,
                         )
                         .await;
-                        warn!("Connection to {} lost, retrying in 1s...", address);
+                        warn!("Connection to {} lost, retrying...", address);
                     }
                     Err(e) => {
-                        error!("Failed to connect to {}: {}. Retrying in 5s...", address, e);
+                        warn!("Failed to connect to {}: {}. Retrying...", address, e);
                     }
                 }
 
+                let wait = backoff.next();
                 tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {},
+                    _ = tokio::time::sleep(wait) => {},
                     _ = token.cancelled() => break,
                 }
             }
