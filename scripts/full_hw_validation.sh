@@ -86,8 +86,7 @@ echo "=== Tier 2: Important Validation (Should Pass) ==="
 run_test "Parameter Operations (Read/Write)" "tests/integration/verify_params.py" 45 false
 run_test "Multi-Client Support (TCP Broadcast)" "tests/integration/verify_multiclient.py" 30 false
 run_test "Ping Storm (Burst Throughput)" "tests/integration/stress_test.py" 60 false
-run_test "High Throughput (Sustained)" "tests/integration/throughput_test.py" 60 false
-run_test "Mixed Load (Stability)" "tests/integration/mixed_load_test.py" 90 false
+run_test "Incremental Load Loop (Throughput & Memory)" "tests/integration/loop_stress_test.py" 45 false
 
 echo "=== Tier 3: Resilience & Chaos (Allowed to Fail) ==="
 # Chaos and Fuzz tests are allowed to fail or timeout without breaking the build
