@@ -27,8 +27,7 @@ case "$OS" in
         done
         ;;
     *)
-        # Unknown OS, try both? Or just fail.
-        # Try Linux style as fallback
+        # Unknown OS fallback
         if [ -e /dev/ttyACM0 ]; then PORT="/dev/ttyACM0"; fi
         ;;
 esac

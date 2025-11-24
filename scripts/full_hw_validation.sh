@@ -6,9 +6,10 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 # Ensure release build
+echo "Building release..."
 cargo build --release --quiet
 
-echo "Starting Router for Hardware Validation..."
+echo "Starting Router for Full Hardware Validation..."
 # Kill any existing instances
 pkill -f mavrouter-rs || true
 
@@ -38,13 +39,29 @@ if ! kill -0 $ROUTER_PID 2>/dev/null; then
     exit 1
 fi
 
-echo "[1/3] Verifying Command/Response (TCP <-> Serial)..."
+echo "=== Functional Tests ==="
+echo "[1/7] Basic Connection (Heartbeat)..."
+python3 tests/integration/verify_hardware.py
+
+echo "[2/7] Command Roundtrip (TCP <-> Serial)..."
 python3 tests/integration/verify_tx.py
 
-echo "[2/3] Verifying Heartbeat Broadcast (UDP <-> Serial)..."
+echo "[3/7] UDP Broadcast (UDP <-> Serial)..."
 python3 tests/integration/verify_udp.py
 
-echo "[3/3] Verifying Resilience (Fuzzing)..."
+echo "[4/7] Parameter Operations (Read/Write)..."
+python3 tests/integration/verify_params.py
+
+echo "=== Stress & Resilience Tests ==="
+echo "[5/7] Ping Storm (Throughput)..."
+python3 tests/integration/stress_test.py
+
+echo "[6/7] Fuzzing (Malicious Payload)..."
 python3 tests/integration/fuzz_test_strict.py
 
-echo "All Hardware Tests Passed."
+echo "[7/7] Chaos (Slow Loris, FD Exhaustion)..."
+python3 tests/integration/chaos_test.py
+
+echo "========================================"
+echo "✅ All Hardware Tests Passed."
+echo "========================================"
