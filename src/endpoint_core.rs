@@ -275,21 +275,27 @@ where
                             }
 
                     let mut buf = Vec::new();
-                    if let Err(e) = match msg.version {
-                        MavlinkVersion::V2 => mavlink::write_v2_msg(&mut buf, msg.header, &*msg.message),
-                        MavlinkVersion::V1 => mavlink::write_v1_msg(&mut buf, msg.header, &*msg.message),
-                    } {
-                                warn!("{} Serialize Error: {}", name, e);
-                                continue;
-                            }
-
-                            if let Err(e) = writer.write_all(&buf).await {
-                                debug!("{} write error: {}", name, e);
-                                break;
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("{} Sender lagged: missed {} messages", name, n);
+                                                if let Err(e) = match msg.version {
+                                                    MavlinkVersion::V2 => mavlink::write_v2_msg(&mut buf, msg.header, &*msg.message),
+                                                    MavlinkVersion::V1 => mavlink::write_v1_msg(&mut buf, msg.header, &*msg.message),
+                                                } {
+                                                    warn!("{} Serialize Error: {}", name, e);
+                                                    continue;
+                                                }
+                    
+                                                tokio::select! {
+                                                    res = writer.write_all(&buf) => {
+                                                        if let Err(e) = res {
+                                                            debug!("{} write error: {}", name, e);
+                                                            break;
+                                                        }
+                                                    }
+                                                    _ = cancel_token_for_writer_loop.cancelled() => {
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            Err(broadcast::error::RecvError::Lagged(n)) => {                            warn!("{} Sender lagged: missed {} messages", name, n);
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
