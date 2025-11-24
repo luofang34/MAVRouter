@@ -2,6 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use mavlink::common::MavMessage;
 use mavlink::common::*;
 use mavrouter_rs::mavlink_utils::extract_target;
+use mavrouter_rs::router::EndpointId;
 use mavrouter_rs::routing::RoutingTable;
 use std::time::Duration; // Explicit import
 
@@ -11,20 +12,20 @@ fn benchmark_routing_table_lookup(c: &mut Criterion) {
     // Populate with realistic data: 10 systems, 5 components each
     for sys in 1..=10 {
         for comp in 1..=5 {
-            rt.update(sys as usize, sys, comp);
+            rt.update(EndpointId(sys as usize), sys, comp);
         }
     }
 
     c.bench_function("routing_lookup_hit", |b| {
-        b.iter(|| black_box(rt.should_send(1, 5, 3)))
+        b.iter(|| black_box(rt.should_send(EndpointId(1), 5, 3)))
     });
 
     c.bench_function("routing_lookup_miss", |b| {
-        b.iter(|| black_box(rt.should_send(1, 99, 1)))
+        b.iter(|| black_box(rt.should_send(EndpointId(1), 99, 1)))
     });
 
     c.bench_function("routing_lookup_broadcast", |b| {
-        b.iter(|| black_box(rt.should_send(1, 0, 0)))
+        b.iter(|| black_box(rt.should_send(EndpointId(1), 0, 0)))
     });
 }
 
@@ -60,7 +61,7 @@ fn benchmark_routing_table_update(c: &mut Criterion) {
         let mut counter = 0u8;
         b.iter(|| {
             counter = counter.wrapping_add(1);
-            rt.update(1, counter, 1);
+            rt.update(EndpointId(1), counter, 1);
         })
     });
 }
@@ -71,7 +72,7 @@ fn benchmark_routing_table_prune(c: &mut Criterion) {
     for size in [10, 100, 1000].iter() {
         let mut rt = RoutingTable::new();
         for i in 0..*size {
-            rt.update(1, (i % 255) as u8, 1);
+            rt.update(EndpointId(1), (i % 255) as u8, 1);
         }
 
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {
