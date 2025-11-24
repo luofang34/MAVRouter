@@ -20,7 +20,7 @@ if [ ! -f "config/mavrouter_test.toml" ]; then
 fi
 
 # Start Router
-RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
+nohup RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
 ROUTER_PID=$!
 echo "Router PID: $ROUTER_PID"
 
