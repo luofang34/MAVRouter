@@ -33,6 +33,7 @@ trap cleanup EXIT
 
 # Wait for startup
 sleep 3
+ps -p $ROUTER_PID
 
 # Verify Process is running
 if ! kill -0 $ROUTER_PID 2>/dev/null; then
