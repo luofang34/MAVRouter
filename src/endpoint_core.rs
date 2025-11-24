@@ -20,7 +20,6 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
-use std::time::Duration;
 
 /// Exponential backoff helper for connection retries.
 #[derive(Debug)]
