@@ -52,6 +52,7 @@ if FC_PORT=$("$SCRIPT_DIR/detect_fc_serial.sh" 2>/dev/null); then
     else
         echo ""
         echo "❌ Hardware tests failed"
+        cat router_hw_val.log # Add this line to show the log
         echo ""
         echo "To skip hardware tests and retry:"
         echo "  SKIP_HW_TEST=1 cargo release --dry-run"
