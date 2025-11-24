@@ -3,10 +3,39 @@ import time
 import socket
 import os
 import threading
+import multiprocessing
+import resource
 from pymavlink import mavutil
 
 TARGET_IP = '127.0.0.1'
 TARGET_PORT = 5760
+
+def get_stress_params():
+    """Auto-detect system resources and return appropriate test params"""
+    # Environment variable override
+    if 'CI_STRESS_CONNECTIONS' in os.environ:
+        return int(os.environ['CI_STRESS_CONNECTIONS'])
+
+    cpu_count = multiprocessing.cpu_count()
+
+    # Auto-detection based on CPU cores
+    if cpu_count >= 64:    # Dev machine (128 cores)
+        return 10000       # Extreme load
+    elif cpu_count >= 8:   # Strong machine
+        return 2000
+    elif cpu_count >= 4:   # Average machine
+        return 500
+    else:                  # CI environment (2 cores)
+        return 200
+
+def check_fd_limit(target_connections):
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    
+    if soft < target_connections + 100:  # Need some reserve
+        print(f"⚠️  Warning: ulimit -n ({soft}) may be insufficient for {target_connections} connections")
+        print(f"   Recommended: ulimit -n {target_connections + 200}")
+        return False
+    return True
 
 def test_slow_loris():
     print("\n[Chaos] Starting Slow Loris Test (1 byte/100ms)...")
@@ -55,11 +84,14 @@ def test_buffer_overflow():
         return False
 
 def test_fd_exhaustion():
-    print("\n[Chaos] Starting FD Exhaustion Test (200 connections)...")
+    target_connections = get_stress_params()
+    check_fd_limit(target_connections)
+    
+    print(f"\n[Chaos] Starting FD Exhaustion Test ({target_connections} connections)...")
     sockets = []
     success = False
     try:
-        for i in range(200):
+        for i in range(target_connections):
             s = socket.create_connection((TARGET_IP, TARGET_PORT))
             sockets.append(s)
             if i % 50 == 0:
@@ -71,7 +103,7 @@ def test_fd_exhaustion():
         # Verify we can still connect one more and send data
         master = mavutil.mavlink_connection(f'tcp:{TARGET_IP}:{TARGET_PORT}')
         if master.wait_heartbeat(timeout=10):
-            print("[Chaos] Router still responsive with 200 clients.")
+            print(f"[Chaos] Router still responsive with {target_connections} clients.")
             success = True
         else:
             print("[Chaos] Router failed to respond to heartbeat (timeout).")
