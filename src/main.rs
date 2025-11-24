@@ -21,14 +21,21 @@ use crate::config::{Config, EndpointConfig};
 use crate::dedup::Dedup;
 use crate::router::create_bus;
 use crate::routing::{RoutingStats, RoutingTable};
+use crate::{lock_read, lock_write};
 use anyhow::Result;
 use clap::Parser;
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 /// Simple Stats buffer history
 struct StatsHistory {
@@ -104,6 +111,82 @@ struct AggregatedStats {
     max_routes: usize,
     min_routes: usize,
     sample_count: usize,
+}
+
+#[cfg(unix)]
+async fn run_stats_server(
+    socket_path: String,
+    routing_table: Arc<RwLock<RoutingTable>>,
+    token: CancellationToken,
+) -> Result<()> {
+    let path = Path::new(&socket_path);
+    if path.exists() {
+        tokio::fs::remove_file(path).await?;
+    }
+
+    let listener = UnixListener::bind(path)?;
+    info!("Stats Query Interface listening on {}", socket_path);
+
+    // Set permissions to allow anyone to query stats (if needed)
+    // In a real scenario, we might want to restrict this.
+    let metadata = std::fs::metadata(path)?;
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(0o777);
+    std::fs::set_permissions(path, permissions)?;
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!("Stats Server shutting down.");
+                // Cleanup socket file
+                if path.exists() {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+                break;
+            }
+            accept_res = listener.accept() => {
+                match accept_res {
+                    Ok((mut stream, _addr)) => {
+                        let rt = routing_table.clone();
+                        tokio::spawn(async move {
+                            let mut buf = [0u8; 1024];
+                            let n = match stream.read(&mut buf).await {
+                                Ok(n) if n > 0 => n,
+                                _ => return,
+                            };
+
+                            let command = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+                            let response = match command.as_str() {
+                                "stats" => {
+                                    let rt_guard = lock_read!(rt);
+                                    let stats = rt_guard.stats();
+                                    // Manually format JSON to avoid serde_json dependency if possible,
+                                    // or just use format! macro for simple structure.
+                                    // Goal was <3KB impact and zero dependencies if possible.
+                                    // Let's stick to format! since structure is flat.
+                                    format!(
+                                        r#"{{"total_systems":{},"total_routes":{},"total_endpoints":{},"timestamp":{}}}"#,
+                                        stats.total_systems,
+                                        stats.total_routes,
+                                        stats.total_endpoints,
+                                        stats.timestamp
+                                    )
+                                }
+                                "help" => "Available commands: stats, help".to_string(),
+                                _ => "Unknown command. Try 'help'".to_string(),
+                            };
+
+                            let _ = stream.write_all(response.as_bytes()).await;
+                        });
+                    }
+                    Err(e) => {
+                        warn!("Stats Server accept error: {}", e);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Parser, Debug)]
@@ -235,6 +318,28 @@ async fn main() -> Result<()> {
                 }
             }
         }));
+    }
+
+    // Stats Query Interface (Unix Socket)
+    #[cfg(unix)]
+    if let Some(socket_path) = config.general.stats_socket_path {
+        if !socket_path.is_empty() {
+            let name = format!("Stats Socket {}", socket_path);
+            let rt = routing_table.clone();
+            let task_token = cancel_token.child_token();
+            let path = socket_path.clone();
+
+            handles.push(tokio::spawn(supervise(
+                name,
+                task_token.clone(),
+                move || {
+                    let rt = rt.clone();
+                    let token = task_token.clone();
+                    let p = path.clone();
+                    async move { run_stats_server(p, rt, token).await }
+                },
+            )));
+        }
     }
 
     // Implicit TCP Server
