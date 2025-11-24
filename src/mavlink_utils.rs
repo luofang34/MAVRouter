@@ -107,6 +107,23 @@ pub fn extract_target(msg: &MavMessage) -> MessageTarget {
 
         // --- Expanded Coverage (Verified Common Messages) ---
         
+        // Mission - additional
+        MISSION_REQUEST_PARTIAL_LIST(m) => (m.target_system, m.target_component),
+        MISSION_WRITE_PARTIAL_LIST(m) => (m.target_system, m.target_component),
+
+        // Parameter - additional
+        PARAM_MAP_RC(m) => (m.target_system, m.target_component),
+
+        // Safety
+        SAFETY_SET_ALLOWED_AREA(m) => (m.target_system, m.target_component),
+
+        // RC
+        RC_CHANNELS_OVERRIDE(m) => (m.target_system, m.target_component),
+
+        // GPS
+        GPS_INJECT_DATA(m) => (m.target_system, m.target_component),
+        SET_GPS_GLOBAL_ORIGIN(m) => (m.target_system, 0),
+
         // Extended Parameters
         PARAM_EXT_SET(m) => (m.target_system, m.target_component),
         PARAM_EXT_REQUEST_READ(m) => (m.target_system, m.target_component),
