@@ -28,6 +28,7 @@ case "$OS" in
         ;;
     *)
         # Unknown OS fallback
+        # This case is less likely to occur on typical CI/Dev machines but provides a safe default.
         if [ -e /dev/ttyACM0 ]; then PORT="/dev/ttyACM0"; fi
         ;;
 esac
