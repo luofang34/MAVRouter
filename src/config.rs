@@ -4,25 +4,68 @@ use anyhow::{Context, Result};
 use tokio::fs;
 use crate::filter::EndpointFilters;
 
+//! Configuration for MAVLink router.
+//!
+//! Loaded from TOML file using [`Config::from_file`].
+//!
+//! # Example
+//! ```toml
+//! [general]
+//! tcp_port = 5760
+//! dedup_period_ms = 100
+//! log = "logs"
+//! log_telemetry = true
+//! bus_capacity = 1000
+//! routing_table_ttl_secs = 300
+//! routing_table_prune_interval_secs = 60
+//!
+//! [[endpoint]]
+//! type = "serial"
+//! device = "/dev/ttyACM0"
+//! baud = 115200
+//!
+//! [[endpoint]]
+//! type = "udp"
+//! address = "0.0.0.0:14550"
+//! mode = "server"
+//!
+//! [[endpoint]]
+//! type = "tcp"
+//! address = "127.0.0.1:5761"
+//! mode = "client"
+//! ```
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    /// General router configuration.
     #[serde(default)]
     pub general: GeneralConfig,
+    /// List of endpoint configurations.
     #[serde(default)]
     pub endpoint: Vec<EndpointConfig>,
 }
 
+//! General router configuration.
 #[derive(Debug, Deserialize, Default)]
 pub struct GeneralConfig {
+    /// Optional TCP server port for general GCS connections.
     pub tcp_port: Option<u16>,
+    /// Message deduplication period in milliseconds. Messages with the same
+    /// system_id, component_id, message_id, and data will be ignored if
+    /// received within this period.
     pub dedup_period_ms: Option<u64>,
+    /// Optional path to a directory for logging MAVLink traffic.
     pub log: Option<String>,
+    /// Whether to log telemetry data (MAVLink messages) to files.
     #[serde(default)]
     pub log_telemetry: bool,
+    /// Capacity of the internal message bus. Typical values are 1000-10000.
     #[serde(default = "default_bus_capacity")]
     pub bus_capacity: usize,
+    /// Time-to-live (TTL) for entries in the routing table, in seconds.
+    /// Entries older than this will be pruned.
     #[serde(default = "default_routing_table_ttl_secs")]
     pub routing_table_ttl_secs: u64,
+    /// Interval at which the routing table is pruned, in seconds.
     #[serde(default = "default_routing_table_prune_interval_secs")]
     pub routing_table_prune_interval_secs: u64,
 }
@@ -34,24 +77,37 @@ fn default_routing_table_prune_interval_secs() -> u64 { 60 }
 #[derive(Debug, Deserialize, Clone)] 
 #[serde(tag = "type")]
 #[serde(rename_all = "lowercase")]
+/// Configuration for a specific communication endpoint.
 pub enum EndpointConfig {
+    /// UDP endpoint configuration.
     Udp {
+        /// Address for the UDP endpoint (e.g., "0.0.0.0:14550").
         address: String,
+        /// Operating mode for the UDP endpoint (client or server).
         #[serde(default = "default_mode_server")]
         mode: EndpointMode,
+        /// Filters to apply to messages passing through this endpoint.
         #[serde(flatten)]
         filters: EndpointFilters,
     },
+    /// TCP endpoint configuration.
     Tcp {
+        /// Address for the TCP endpoint (e.g., "127.0.0.1:5761").
         address: String,
+        /// Operating mode for the TCP endpoint (client or server).
         #[serde(default = "default_mode_client")]
         mode: EndpointMode,
+        /// Filters to apply to messages passing through this endpoint.
         #[serde(flatten)]
         filters: EndpointFilters,
     },
+    /// Serial endpoint configuration.
     Serial {
+        /// Device path for the serial port (e.g., "/dev/ttyACM0" or "COM1").
         device: String,
+        /// Baud rate for the serial connection.
         baud: u32,
+        /// Filters to apply to messages passing through this endpoint.
         #[serde(flatten)]
         filters: EndpointFilters,
     },
@@ -59,8 +115,11 @@ pub enum EndpointConfig {
 
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
+/// Operating mode for network endpoints.
 pub enum EndpointMode {
+    /// Connects as a client to a remote server.
     Client,
+    /// Listens for incoming connections as a server.
     Server,
 }
 
@@ -68,6 +127,16 @@ fn default_mode_server() -> EndpointMode { EndpointMode::Server }
 fn default_mode_client() -> EndpointMode { EndpointMode::Client }
 
 impl Config {
+    /// Loads the router configuration from a TOML file.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the TOML configuration file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `anyhow::Error` if the file cannot be read or parsed,
+    /// or if the configuration fails validation.
     pub async fn load(path: impl AsRef<Path>) -> Result<Self> {
         let content = fs::read_to_string(path.as_ref()).await
             .context("Failed to read config file")?;
@@ -79,6 +148,13 @@ impl Config {
         Ok(config)
     }
 
+    /// Validates the loaded configuration to check for common errors,
+    /// such as duplicate ports or non-existent serial devices (on Unix).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `anyhow::Error` if the configuration contains invalid or
+    /// conflicting settings.
     pub fn validate(&self) -> Result<()> {
         let mut ports = std::collections::HashSet::new();
 

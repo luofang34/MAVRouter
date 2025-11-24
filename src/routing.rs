@@ -1,15 +1,23 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Instant, Duration};
 
+/// Represents an entry in the routing table for a specific (system_id, component_id) pair
+/// or just a system_id. It tracks which endpoints have seen this MAVLink entity.
 struct RouteEntry {
+    /// Set of endpoint IDs that have seen this MAVLink entity.
     endpoints: HashSet<usize>,
+    /// The last time this entry was updated or a message was seen from this entity.
     last_seen: Instant,
 }
 
+/// Intelligent routing table that learns MAVLink network topology.
+///
+/// Routes messages based on `system_id` and `component_id`, with TTL-based
+/// expiration to handle dynamic topologies.
 pub struct RoutingTable {
-    // Map of (sysid, compid) -> RouteEntry
+    /// Map of `(system_id, component_id)` -> `RouteEntry` for specific component routes.
     routes: HashMap<(u8, u8), RouteEntry>,
-    // Map of sysid -> RouteEntry (for system-wide routing)
+    /// Map of `system_id` -> `RouteEntry` for system-wide routes (component_id 0).
     sys_routes: HashMap<u8, RouteEntry>,
 }
 
@@ -19,15 +27,20 @@ impl Default for RoutingTable {
     }
 }
 
+/// Statistics about the current state of the routing table.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct RoutingStats {
+    /// Total number of unique MAVLink systems currently known.
     pub total_systems: usize,
+    /// Total number of specific `(system_id, component_id)` routes known.
     pub total_routes: usize,
+    /// Total number of unique endpoint IDs represented in the routing table.
     pub total_endpoints: usize,
 }
 
 impl RoutingTable {
+    /// Creates a new, empty `RoutingTable`.
     pub fn new() -> Self {
         Self {
             routes: HashMap::new(),
@@ -35,6 +48,18 @@ impl RoutingTable {
         }
     }
 
+    /// Updates the routing table with a new observation.
+    ///
+    /// When a message is received from a MAVLink entity (`sysid`, `compid`)
+    /// via a specific `endpoint_id`, this method records that the
+    /// `endpoint_id` is a known path for that entity.
+    /// The `last_seen` timestamp for the entry is updated.
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint_id` - The ID of the endpoint where the message was received.
+    /// * `sysid` - The MAVLink system ID of the message sender.
+    /// * `compid` - The MAVLink component ID of the message sender.
     pub fn update(&mut self, endpoint_id: usize, sysid: u8, compid: u8) {
         let now = Instant::now();
         
@@ -59,20 +84,39 @@ impl RoutingTable {
             });
     }
 
-    /// Check if a message should be sent to a specific endpoint based on learned routes
-    /// 
-    /// Logic (Policy B - Aggressive Fallback):
-    /// 1. If target_sysid == 0: Broadcast message, send to all
-    /// 2. If we have a specific route for (target_sysid, target_compid): Send ONLY to endpoints that have seen this combination.
-    /// 3. If we have a route for target_sysid but NOT the specific component: Send to ALL endpoints that have seen this system (assuming component might be new/moved).
-    /// 4. If no route exists: Don't send.
+    /// Determines if a message targeting `(target_sysid, target_compid)`
+    /// should be sent to a particular `endpoint_id`.
+    ///
+    /// This method implements a routing policy to decide message distribution.
+    ///
+    /// # Routing Logic (Policy B - Aggressive Fallback):
+    /// 1. If `target_sysid == 0`: This is a broadcast message, it should be sent to all endpoints.
+    ///    The routing table does not filter broadcast messages based on target.
+    /// 2. If a specific route for `(target_sysid, target_compid)` exists:
+    ///    The message is sent *only* to endpoints that have specifically seen this combination.
+    /// 3. If a route for `target_sysid` exists (i.e., the system is known) but *not* for the
+    ///    specific component `target_compid`:
+    ///    The message is sent to *all* endpoints that have seen this system. This acts as an
+    ///    "aggressive fallback," assuming the component might be new or its location has moved.
+    /// 4. If no route (neither specific component nor system-wide) exists for `target_sysid`:
+    ///    The message is dropped (not sent to any endpoint).
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint_id` - The ID of the endpoint to check.
+    /// * `target_sysid` - The MAVLink system ID targeted by the message.
+    /// * `target_compid` - The MAVLink component ID targeted by the message.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the message should be sent to `endpoint_id`, `false` otherwise.
     pub fn should_send(&self, endpoint_id: usize, target_sysid: u8, target_compid: u8) -> bool {
-        if target_sysid == 0 {
+        if target_sysid == 0 { // MAV_BROADCAST_SYSTEM_ID
             return true;
         }
 
         if let Some(entry) = self.sys_routes.get(&target_sysid) {
-            if target_compid == 0 {
+            if target_compid == 0 { // MAV_BROADCAST_COMPONENT_ID or target system only
                 return entry.endpoints.contains(&endpoint_id);
             }
 
@@ -89,13 +133,23 @@ impl RoutingTable {
         false
     }
 
+    /// Prunes old entries from the routing table.
+    ///
+    /// Any route entry (`(system_id, component_id)` or `system_id`) that has not been
+    /// updated within `max_age` duration will be removed. This helps in managing
+    /// dynamic network topologies where MAVLink entities might disconnect or change
+    /// their associated endpoints.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_age` - The maximum duration an entry can remain in the table without being updated.
     pub fn prune(&mut self, max_age: Duration) {
         let now = Instant::now();
         self.routes.retain(|_, v| now.duration_since(v.last_seen) < max_age);
         self.sys_routes.retain(|_, v| now.duration_since(v.last_seen) < max_age);
     }
 
-    #[allow(dead_code)]
+    /// Returns current statistics about the routing table.
     pub fn stats(&self) -> RoutingStats {
         RoutingStats {
             total_systems: self.sys_routes.len(),

@@ -1,3 +1,10 @@
+//! Serial endpoint for MAVLink communications.
+//!
+//! This module handles MAVLink traffic over serial ports, providing
+//! reliable communication with connected flight controllers or other
+//! serial MAVLink devices. It supports automatic reconnection if the
+//! serial port connection is lost.
+
 use anyhow::{Result, Context};
 use tokio_serial::SerialPortBuilderExt;
 use tokio::sync::broadcast;
@@ -12,6 +19,36 @@ use crate::endpoint_core::{EndpointCore, run_stream_loop};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
+/// Runs the serial endpoint logic, continuously attempting to open and
+/// communicate over the specified serial device.
+///
+/// This function manages the lifecycle of a serial connection:
+/// - It attempts to open the serial port with the given baud rate.
+/// - If successful, it enters a loop to process incoming and outgoing MAVLink messages.
+/// - If the port cannot be opened or the connection is lost, it retries after a delay.
+/// - It gracefully shuts down when the `CancellationToken` is cancelled.
+///
+/// # Arguments
+///
+/// * `id` - Unique identifier for this endpoint.
+/// * `device` - The path to the serial device (e.g., "/dev/ttyACM0" on Linux, "COM1" on Windows).
+/// * `baud` - The baud rate for the serial connection (e.g., 115200).
+/// * `bus_tx` - Sender half of the message bus for sending `RoutedMessage`s to other endpoints.
+/// * `bus_rx` - Receiver half of the message bus for receiving `RoutedMessage`s from other endpoints.
+/// * `routing_table` - Shared `RoutingTable` to update and query routing information.
+/// * `dedup` - Shared `Dedup` instance for message deduplication.
+/// * `filters` - `EndpointFilters` to apply for this specific endpoint.
+/// * `token` - `CancellationToken` to signal graceful shutdown.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure. The function will run indefinitely
+/// until the `CancellationToken` is cancelled or a critical, unrecoverable error occurs.
+///
+/// # Errors
+///
+/// Returns an `anyhow::Error` if a critical error occurs that prevents further operation,
+/// such as a permanent serial port configuration issue.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     id: usize,
@@ -60,6 +97,28 @@ pub async fn run(
     Ok(())
 }
 
+/// Opens the specified serial port and runs the stream processing loop.
+///
+/// This is a helper function that attempts to open a serial port and
+/// then delegates to `run_stream_loop` to handle the actual MAVLink
+/// message processing.
+///
+/// # Arguments
+///
+/// * `device` - The path to the serial device.
+/// * `baud` - The baud rate for the serial connection.
+/// * `bus_rx` - Receiver half of the message bus for outgoing messages.
+/// * `core` - The `EndpointCore` instance containing shared resources and logic.
+/// * `token` - `CancellationToken` to signal graceful shutdown.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure to open the port or if `run_stream_loop`
+/// encounters an error.
+///
+/// # Errors
+///
+/// Returns an `anyhow::Error` if the serial port cannot be opened or configured.
 async fn open_and_run(
     device: &str,
     baud: u32,

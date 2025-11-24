@@ -1,3 +1,13 @@
+//! UDP endpoint for MAVLink communications.
+//!
+//! This module handles MAVLink traffic over UDP sockets, supporting both
+//! server (binding to an address and listening for incoming packets)
+//! and client (sending to a specific remote address) modes.
+//!
+//! In server mode, it tracks connected clients by their `SocketAddr` to allow
+//! broadcasting messages back to them. In client mode, it continuously sends
+//! to a predefined remote address.
+
 use anyhow::{Result, Context};
 use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
@@ -17,6 +27,37 @@ use crate::endpoint_core::EndpointCore;
 use crate::framing::MavlinkFrame;
 use crate::lock_mutex;
 
+/// Runs the UDP endpoint logic, continuously handling MAVLink traffic.
+///
+/// This function sets up a UDP socket based on the specified mode (server or client)
+/// and manages incoming and outgoing MAVLink messages through the provided message bus.
+///
+/// In **server mode**, it binds to the given `address` and tracks all unique `SocketAddr`s
+/// from which it receives messages, using them as targets for outgoing broadcast messages.
+/// In **client mode**, it continuously sends outgoing messages to the specified `address`.
+///
+/// # Arguments
+///
+/// * `id` - Unique identifier for this endpoint.
+/// * `address` - The UDP address to bind to (server) or send to (client), e.g., "0.0.0.0:14550" or "127.0.0.1:14550".
+/// * `mode` - The operating mode (`EndpointMode::Server` or `EndpointMode::Client`).
+/// * `bus_tx` - Sender half of the message bus for sending `RoutedMessage`s to other endpoints.
+/// * `bus_rx` - Receiver half of the message bus for receiving `RoutedMessage`s from other endpoints.
+/// * `routing_table` - Shared `RoutingTable` to update and query routing information.
+/// * `dedup` - Shared `Dedup` instance for message deduplication.
+/// * `filters` - `EndpointFilters` to apply for this specific endpoint.
+/// * `token` - `CancellationToken` to signal graceful shutdown.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure. The function will run indefinitely
+/// until the `CancellationToken` is cancelled or a critical error occurs.
+///
+/// # Errors
+///
+/// Returns an `anyhow::Error` if:
+/// - Binding to the specified address fails.
+/// - The remote address for client mode cannot be resolved.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     id: usize,

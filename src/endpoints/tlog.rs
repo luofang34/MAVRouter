@@ -1,3 +1,10 @@
+//! TLOG endpoint for logging MAVLink messages to disk.
+//!
+//! This module provides functionality to capture all MAVLink messages
+//! flowing through the router's message bus and save them to a
+//! TLOG (Telemetry Log) file. Each TLOG file is timestamped, and
+//! messages are prepended with their arrival timestamp.
+
 use crate::router::RoutedMessage;
 use anyhow::{Context, Result};
 use mavlink::MavlinkVersion;
@@ -9,6 +16,29 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+/// Runs the TLOG logging endpoint, continuously saving MAVLink messages to a file.
+///
+/// This function listens for `RoutedMessage`s on the message bus, formats them
+/// with a timestamp, and writes them to a TLOG file in the specified directory.
+/// A new TLOG file is created for each run, named with a timestamp.
+///
+/// # Arguments
+///
+/// * `logs_dir` - The directory where TLOG files should be saved.
+/// * `bus_rx` - Receiver half of the message bus, subscribed to all `RoutedMessage`s.
+/// * `cancel_token` - `CancellationToken` to signal graceful shutdown.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure. The function will run indefinitely
+/// until the `CancellationToken` is cancelled or a critical error occurs.
+///
+/// # Errors
+///
+/// Returns an `anyhow::Error` if:
+/// - The `logs_dir` cannot be created.
+/// - The TLOG file cannot be created.
+/// - An error occurs during writing to the TLOG file.
 pub async fn run(
     logs_dir: String,
     mut bus_rx: broadcast::Receiver<RoutedMessage>,

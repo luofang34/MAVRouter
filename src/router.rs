@@ -1,16 +1,48 @@
 use mavlink::{common::MavMessage, MavHeader, MavlinkVersion};
 use tokio::sync::broadcast;
 
+/// A routed MAVLink message with source information.
 #[derive(Clone, Debug)]
 pub struct RoutedMessage {
+    /// Identifier of the source endpoint that received this message.
     pub source_id: usize,
+    /// MAVLink message header containing system_id, component_id, and sequence number.
     pub header: MavHeader,
+    /// The actual MAVLink message payload.
     pub message: MavMessage,
+    /// The MAVLink protocol version used for this message (V1 or V2).
     pub version: MavlinkVersion,
 }
 
+/// Type alias for the message bus sender.
+///
+/// This is a Tokio `broadcast::Sender` used to distribute `RoutedMessage`s
+/// to all active endpoints and internal router components.
 pub type MessageBus = broadcast::Sender<RoutedMessage>;
 
+/// Creates a new message bus with the specified capacity.
+///
+/// The message bus is a Tokio `broadcast` channel, which allows multiple
+/// receivers to subscribe and receive copies of messages sent through it.
+///
+/// # Arguments
+///
+/// * `capacity` - The maximum number of messages that can be buffered
+///   if receivers are slow. If `capacity` is exceeded, older messages
+///   will be dropped for slower receivers.
+///
+/// # Returns
+///
+/// A `MessageBus` (Tokio `broadcast::Sender`) instance.
+///
+/// # Example
+///
+/// ```
+/// use mavrouter_rs::router;
+///
+/// let bus = router::create_bus(1000);
+/// // Endpoints can now subscribe to this bus
+/// ```
 pub fn create_bus(capacity: usize) -> MessageBus {
     let (tx, _) = broadcast::channel(capacity);
     tx

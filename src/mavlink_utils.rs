@@ -5,33 +5,52 @@
 
 use mavlink::common::MavMessage;
 
-/// Represents the target of a MAVLink message
+/// Represents the target (system and component IDs) of a MAVLink message.
+///
+/// This struct is used to determine where a message should be routed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageTarget {
+    /// The target system ID (0 for broadcast).
     pub system_id: u8,
+    /// The target component ID (0 for system-wide or broadcast).
     pub component_id: u8,
 }
 
 impl MessageTarget {
-    /// Returns true if this is a broadcast message (system_id == 0)
+    /// Returns `true` if this `MessageTarget` indicates a broadcast message.
+    /// A broadcast message typically has `system_id` set to 0.
     #[allow(dead_code)]
     pub fn is_broadcast(&self) -> bool {
         self.system_id == 0
     }
 
-    /// Returns true if this is a system-wide message (component_id == 0)
+    /// Returns `true` if this `MessageTarget` indicates a system-wide message.
+    /// A system-wide message has `component_id` set to 0, targeting all
+    /// components within a specific system.
     #[allow(dead_code)]
     pub fn is_system_wide(&self) -> bool {
         self.component_id == 0
     }
 }
 
-/// Extract target system/component from a MAVLink message
-/// 
-/// Returns (0, 0) for broadcast messages or messages without explicit targets.
-/// 
-/// Performance: This function uses a match statement which compiles to a jump table.
-/// Benchmark target: < 5ns per call on modern CPUs.
+/// Extracts the target `system_id` and `component_id` from a MAVLink message.
+///
+/// This function inspects various MAVLink message types to identify their
+/// intended recipients. For messages that are inherently broadcast or do
+/// not have explicit target fields, it returns `(0, 0)`.
+///
+/// # Arguments
+///
+/// * `msg` - A reference to the `MavMessage` from which to extract the target.
+///
+/// # Returns
+///
+/// A `MessageTarget` struct containing the extracted `system_id` and `component_id`.
+///
+/// # Performance
+///
+/// This function uses a match statement which compiles to a jump table,
+/// making it very efficient. Benchmarks indicate a performance of < 5ns per call on modern CPUs.
 pub fn extract_target(msg: &MavMessage) -> MessageTarget {
     use MavMessage::*;
 

@@ -1,13 +1,32 @@
+//! Message deduplication logic for MAVLink messages.
+//!
+//! This module provides a mechanism to prevent processing duplicate messages
+//! within a specified time window. It's useful for filtering out redundant
+//! retransmissions or messages generated too frequently by sources.
+
 use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
+/// Implements message deduplication based on message payload and a time window.
+///
+/// Duplicate messages (same payload hash) received within the `dedup_period`
+/// will be identified as duplicates.
 pub struct Dedup {
+    /// The time window within which messages are considered duplicates.
     dedup_period: Duration,
+    /// A history of messages seen, used for cleaning up expired entries.
     history: VecDeque<(Instant, u64)>,
+    /// A set of hashes of recently seen messages for quick lookup.
     set: HashSet<u64>,
 }
 
 impl Dedup {
+    /// Creates a new `Dedup` instance with the specified deduplication period.
+    ///
+    /// # Arguments
+    ///
+    /// * `dedup_period` - The duration within which messages are considered duplicates.
+    ///   If `Duration::ZERO`, deduplication is effectively disabled.
     pub fn new(dedup_period: Duration) -> Self {
         Self {
             dedup_period,
@@ -16,6 +35,19 @@ impl Dedup {
         }
     }
 
+    /// Checks if a given message payload is a duplicate within the deduplication period.
+    ///
+    /// This method calculates a hash of the `payload` and checks if it has been
+    /// seen recently. It also automatically cleans up expired entries from its
+    /// internal history.
+    ///
+    /// # Arguments
+    ///
+    /// * `payload` - The byte slice representing the MAVLink message payload.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the message is a duplicate, `false` otherwise.
     pub fn is_duplicate(&mut self, payload: &[u8]) -> bool {
         if self.dedup_period.is_zero() {
             return false;
