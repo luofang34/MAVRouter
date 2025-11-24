@@ -165,7 +165,10 @@ where
     let core_read = core.clone();
     let name_read = name.clone();
     
-    let cancel_token_writer = cancel_token.clone(); // Clone for writer_loop
+    // Clone CancellationToken for each independent async block/select branch
+    let cancel_token_for_reader_loop = cancel_token.clone();
+    let cancel_token_for_writer_loop = cancel_token.clone();
+    let cancel_token_for_final_select = cancel_token.clone();
     
     let reader_loop = async move {
         let mut parser = StreamParser::new();
@@ -173,7 +176,7 @@ where
 
         loop {
             tokio::select! {
-                _ = cancel_token.cancelled() => break,
+                _ = cancel_token_for_reader_loop.cancelled() => break,
                 read_res = reader.read(&mut buf) => {
                     match read_res {
                         Ok(0) => break, // EOF
@@ -196,7 +199,7 @@ where
     let writer_loop = async move {
         loop {
             tokio::select! {
-                _ = cancel_token_writer.cancelled() => break,
+                _ = cancel_token_for_writer_loop.cancelled() => break,
                 msg_res = bus_rx.recv() => {
                     match msg_res {
                         Ok(msg) => {
@@ -231,6 +234,6 @@ where
     tokio::select! {
         _ = reader_loop => Ok(()),
         _ = writer_loop => Ok(()),
-        _ = cancel_token.cancelled() => Ok(()),
+        _ = cancel_token_for_final_select.cancelled() => Ok(()),
     }
 }
