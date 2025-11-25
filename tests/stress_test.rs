@@ -66,7 +66,7 @@ fn test_routing_table_stress_functional() {
 
 #[test]
 fn test_dedup_memory_actually_bounded() {
-    let mut dedup = Dedup::new(Duration::from_millis(100));
+    let dedup = Dedup::new(Duration::from_millis(100));
     let iterations = stress_iterations();
     println!(
         "Running test_dedup_memory_actually_bounded with {} iterations",

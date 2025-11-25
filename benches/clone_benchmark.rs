@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use mavlink::common::MavMessage;
 use mavlink::MavHeader;
@@ -14,7 +15,7 @@ fn bench_routed_message_clone(c: &mut Criterion) {
         message: Arc::new(message),
         version: MavlinkVersion::V2,
         timestamp_us: 0,
-        serialized_bytes: Arc::new(Vec::new()),
+        serialized_bytes: Bytes::new(),
     };
 
     c.bench_function("routed_message_clone", |b| {

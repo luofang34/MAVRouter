@@ -1,4 +1,5 @@
 use mavlink::{common::MavMessage, MavHeader, MavlinkVersion};
+use bytes::Bytes; // Added bytes::Bytes import
 use std::fmt;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -28,7 +29,7 @@ pub struct RoutedMessage {
     /// Arrival timestamp in microseconds since UNIX EPOCH.
     pub timestamp_us: u64,
     /// Cached serialized message bytes to avoid re-serialization.
-    pub serialized_bytes: Arc<Vec<u8>>,
+    pub serialized_bytes: Bytes,
 }
 
 /// Type alias for the message bus sender.
@@ -82,7 +83,7 @@ mod tests {
             message: Arc::new(MavMessage::HEARTBEAT(HEARTBEAT_DATA::default())),
             version: MavlinkVersion::V2,
             timestamp_us: 0,
-            serialized_bytes: Arc::new(Vec::new()),
+            serialized_bytes: Bytes::new(),
         };
 
         bus.send(msg.clone()).expect("Failed to send test message");

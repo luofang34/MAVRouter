@@ -12,8 +12,10 @@ use crate::mavlink_utils::extract_target;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use anyhow::Result;
+use bytes::Bytes;
 use mavlink::{MavlinkVersion, Message};
 use parking_lot::{Mutex, RwLock};
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
@@ -88,6 +90,12 @@ pub struct EndpointCore {
     pub filters: EndpointFilters,
 }
 
+// Thread-local buffer for serializing incoming messages to avoid repeated allocations.
+// MAVLink v2 max: 280 bytes payload + 12 bytes header + 2 bytes CRC = 294 bytes total.
+thread_local! {
+    static SERIALIZE_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(294));
+}
+
 impl EndpointCore {
     /// Handles an incoming MAVLink frame, processing it through filters,
     /// deduplication, and routing table updates, then forwarding it to the message bus.
@@ -104,27 +112,48 @@ impl EndpointCore {
             return; // Message filtered out, ignore
         }
 
-        let mut temp_buf = Vec::new();
-        if let Err(e) = match frame.version {
-            MavlinkVersion::V2 => {
-                mavlink::write_v2_msg(&mut temp_buf, frame.header, &frame.message)
+        // 2. Serialize using thread-local buffer (reuse allocations)
+        let serialized_bytes_result = SERIALIZE_BUF.with(|buf| {
+            let mut buf_vec = buf.borrow_mut();
+            buf_vec.clear(); // Reuse buffer
+
+            if let Err(e) = match frame.version {
+                MavlinkVersion::V2 => {
+                    mavlink::write_v2_msg(&mut *buf_vec, frame.header, &frame.message)
+                }
+                MavlinkVersion::V1 => {
+                    mavlink::write_v1_msg(&mut *buf_vec, frame.header, &frame.message)
+                }
+            } {
+                warn!("Inbound Serialize Error: {}", e);
+                return Err(e);
             }
-            MavlinkVersion::V1 => {
-                mavlink::write_v1_msg(&mut temp_buf, frame.header, &frame.message)
+
+            // Convert Vec to Bytes (cheap, reference-counted for subsequent clones)
+            Ok(Bytes::copy_from_slice(&buf_vec))
+        });
+
+        let serialized_bytes = match serialized_bytes_result {
+            Ok(bytes) => bytes,
+            Err(_) => return, // Serialization failed
+        };
+
+        // 3. Check deduplication (combine check + insert in single lock)
+        let is_dup = {
+            let mut dedup = self.dedup.lock();
+            if dedup.is_duplicate(&serialized_bytes) {
+                true
+            } else {
+                dedup.insert(&serialized_bytes);
+                false
             }
-        } {
-            warn!("Inbound Serialize Error: {}", e);
-            return;
+        };
+
+        if is_dup {
+            return; // Duplicate message, ignore
         }
 
-        // 2. Check if it's a duplicate
-        if self.dedup.lock().is_duplicate(&temp_buf) {
-            return; // It's a duplicate, ignore
-        }
-
-        // Message is not a duplicate and passed filters, so insert it into Dedup
-        self.dedup.lock().insert(&temp_buf);
-
+        // 4. Update routing table
         {
             let now = Instant::now();
 
@@ -145,13 +174,11 @@ impl EndpointCore {
             }
         }
 
+        // 5. Send to message bus
         let timestamp_us = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::from_secs(0))
             .as_micros() as u64;
-
-        // Reuse serialized bytes
-        let serialized_bytes = Arc::new(temp_buf);
 
         if let Err(e) = self.bus_tx.send(RoutedMessage {
             source_id: self.id,

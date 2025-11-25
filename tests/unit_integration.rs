@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use bytes::Bytes;
 use mavlink::{MavHeader, MavlinkVersion};
 use mavrouter_rs::dedup::Dedup;
 use mavrouter_rs::endpoint_core::{run_stream_loop, EndpointCore};
@@ -74,7 +75,7 @@ async fn test_stream_loopback() {
         message: Arc::new(message),
         version: MavlinkVersion::V2,
         timestamp_us: 0,
-        serialized_bytes: Arc::new(buf_out),
+        serialized_bytes: Bytes::from(buf_out),
     };
     bus.send(msg_out).unwrap();
 
