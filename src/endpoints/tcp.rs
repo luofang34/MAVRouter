@@ -14,6 +14,7 @@ use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
+use async_broadcast::{Receiver, Sender};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -22,7 +23,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-use async_broadcast::{Receiver, Sender};
 
 /// Runs the TCP endpoint logic, continuously handling connections based on the specified mode.
 ///

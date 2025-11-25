@@ -12,6 +12,7 @@ use crate::framing::{MavlinkFrame, StreamParser};
 use crate::mavlink_utils::extract_target;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
+use async_broadcast::{Receiver, RecvError, Sender, TryRecvError};
 use mavlink::Message;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -19,7 +20,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
-use async_broadcast::{Receiver, Sender, TryRecvError, RecvError};
 
 /// Exponential backoff helper for connection retries.
 #[derive(Debug)]
@@ -443,7 +443,7 @@ mod tests {
         // Should be near wall-clock now (within a generous window to avoid flakiness)
         let now = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_micros() as u64;
         let tolerance = 5_000_000; // 5 seconds
         assert!(t2 + tolerance >= now);

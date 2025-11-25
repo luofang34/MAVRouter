@@ -71,15 +71,7 @@ pub async fn run(
     };
 
     loop {
-        match open_and_run(
-            &device,
-            baud,
-            bus_rx.clone(),
-            core.clone(),
-            token.clone(),
-        )
-        .await
-        {
+        match open_and_run(&device, baud, bus_rx.clone(), core.clone(), token.clone()).await {
             Ok(_) => {
                 if token.is_cancelled() {
                     info!("Serial port {} loop stopped (cancelled).", device);

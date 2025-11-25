@@ -209,43 +209,6 @@ impl RoutingTable {
         comp_needs_update || sys_needs_update
     }
 
-    /// Combined check-and-update operation that avoids double-locking.
-    /// Returns true if an update was performed, false if skipped.
-    /// This is more efficient than calling needs_update_for_endpoint() + update() separately.
-    #[inline]
-    pub fn update_if_needed(
-        &mut self,
-        endpoint_id: EndpointId,
-        sysid: u8,
-        compid: u8,
-        now: Instant,
-    ) -> bool {
-        // Check if any update is needed (fast path - most messages don't need updates)
-        let comp_needs_update = match self.routes.get(&(sysid, compid)) {
-            None => true,
-            Some(e) => {
-                !e.endpoints.contains(&endpoint_id)
-                    || now.duration_since(e.last_seen) >= Duration::from_secs(1)
-            }
-        };
-
-        let sys_needs_update = match self.sys_routes.get(&sysid) {
-            None => true,
-            Some(e) => {
-                !e.endpoints.contains(&endpoint_id)
-                    || now.duration_since(e.last_seen) >= Duration::from_secs(1)
-            }
-        };
-
-        if !comp_needs_update && !sys_needs_update {
-            return false; // No update needed
-        }
-
-        // Perform the actual update (reuse the update() method logic)
-        self.update(endpoint_id, sysid, compid, now);
-        true
-    }
-
     /// Determines if a message targeting `(target_sysid, target_compid)`
     /// should be sent to a particular `endpoint_id`.
     ///
