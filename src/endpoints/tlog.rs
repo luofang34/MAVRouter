@@ -7,7 +7,6 @@
 
 use crate::router::RoutedMessage;
 use anyhow::{Context, Result};
-use mavlink::MavlinkVersion;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, File};
@@ -73,35 +72,27 @@ pub async fn run(
                 break;
             }
             res = bus_rx.recv() => {
-                match res {
-                    Ok(msg) => {
-                        let mut buf = Vec::new();
-                        let res = match msg.version {
-                             MavlinkVersion::V2 => mavlink::write_v2_msg(&mut buf, msg.header, &*msg.message),
-                             MavlinkVersion::V1 => mavlink::write_v1_msg(&mut buf, msg.header, &*msg.message),
-                        };
-
-                        if res.is_ok() {
-                            // Use timestamp from RoutedMessage to avoid syscall per message
-                            let timestamp_us = msg.timestamp_us;
-                            let ts_bytes = timestamp_us.to_be_bytes();
-
-                            if let Err(e) = writer.write_all(&ts_bytes).await {
-                                error!("TLog write error: {}", e);
-                                break;
-                            }
-                            if let Err(e) = writer.write_all(&buf).await {
-                                error!("TLog write error: {}", e);
-                                break;
-                            }
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("TLog Logger lagged: missed {} messages", n);
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
+                                    match res {
+                                        Ok(msg) => {
+                                            // Use timestamp from RoutedMessage
+                                            let timestamp_us = msg.timestamp_us;
+                                            let ts_bytes = timestamp_us.to_be_bytes();
+                
+                                            if let Err(e) = writer.write_all(&ts_bytes).await {
+                                                error!("TLog write error: {}", e);
+                                                break;
+                                            }
+                                            // Use pre-serialized bytes
+                                            if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
+                                                error!("TLog write error: {}", e);
+                                                break;
+                                            }
+                                        }
+                                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                                            warn!("TLog Logger lagged: missed {} messages", n);
+                                        }
+                                        Err(broadcast::error::RecvError::Closed) => break,
+                                    }            }
         }
     }
 
