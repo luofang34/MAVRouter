@@ -1,4 +1,4 @@
-//! # mavrouter-rs
+//! # mavrouter
 //!
 //! High-performance, intelligent MAVLink router for embedded systems.
 //!
@@ -12,7 +12,7 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use mavrouter_rs::{config::Config, router};
+//! use mavrouter::{config::Config, router};
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let config = Config::load("mavrouter.toml").await?;
