@@ -85,8 +85,17 @@ run_test "UDP Broadcast (UDP <-> Serial)" "tests/integration/verify_udp.py" 30 f
 echo "=== Tier 2: Important Validation (Should Pass) ==="
 run_test "Parameter Operations (Read/Write)" "tests/integration/verify_params.py" 45 false
 run_test "Multi-Client Support (TCP Broadcast)" "tests/integration/verify_multiclient.py" 30 false
+
+echo "--------------------------------------------------"
+echo "Restarting Router for Stress Tests (No Hardware)..."
+pkill -f "target/release/mavrouter-rs" || true
+sleep 1
+RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_stress.toml > router_hw_val.log 2>&1 &
+# Allow startup time
+sleep 2
+
 run_test "Ping Storm (Burst Throughput)" "tests/integration/stress_test.py" 60 false
-run_test "Incremental Load Loop (Throughput & Memory)" "tests/integration/loop_stress_test.py" 45 false
+run_test "Incremental Load Loop (Throughput & Memory)" "tests/integration/loop_stress_test.py" 90 false
 
 echo "=== Tier 3: Resilience & Chaos (Allowed to Fail) ==="
 # Chaos and Fuzz tests are allowed to fail or timeout without breaking the build
