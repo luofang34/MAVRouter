@@ -37,6 +37,7 @@ thiserror = "1.0"
 tokio-util = { version = "0.7", features = ["codec", "net"] }
 bytes = "1.0"
 ahash = "0.8"
+dashmap = "5.5"
 
 [dev-dependencies]
 serial_test = "3.0"

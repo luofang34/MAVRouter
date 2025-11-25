@@ -16,8 +16,8 @@ use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use anyhow::{Context, Result};
 use mavlink::MavlinkVersion;
-use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
+use parking_lot::{Mutex, RwLock}; // Re-added
+use dashmap::DashMap;
 use std::io::Cursor;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
@@ -97,7 +97,7 @@ pub async fn run(
     let s = r.clone();
 
     // Map of client address to last seen time
-    let clients = Arc::new(Mutex::new(HashMap::new()));
+    let clients: Arc<DashMap<SocketAddr, Instant>> = Arc::new(DashMap::new());
 
     let clients_recv = clients.clone();
     let r_socket = r.clone();
@@ -109,10 +109,7 @@ pub async fn run(
         loop {
             match r_socket.recv_from(&mut buf).await {
                 Ok((len, addr)) => {
-                    {
-                        let mut guard = clients_recv.lock();
-                        guard.insert(addr, Instant::now());
-                    }
+                    clients_recv.insert(addr, Instant::now());
 
                     let mut cursor = Cursor::new(&buf[..len]);
                     let res = mavlink::read_v2_msg::<mavlink::common::MavMessage, _>(&mut cursor)
@@ -160,10 +157,7 @@ pub async fn run(
                             warn!("UDP send error to target: {}", e);
                         }
                     } else {
-                        let targets: Vec<SocketAddr> = {
-                            let guard = clients_send.lock();
-                            guard.keys().cloned().collect()
-                        };
+                        let targets: Vec<SocketAddr> = clients_send.iter().map(|r| *r.key()).collect();
                         for client in targets {
                             if let Err(e) = s_socket.send_to(&packet_data, client).await {
                                 warn!("UDP broadcast error to {}: {}", client, e);
@@ -187,10 +181,9 @@ pub async fn run(
             interval.tick().await;
             let now = Instant::now();
             let ttl = Duration::from_secs(cleanup_ttl_secs);
-            let mut guard = clients_cleanup.lock();
-            let initial_len = guard.len();
-            guard.retain(|_, last_seen| now.duration_since(*last_seen) < ttl);
-            let dropped = initial_len - guard.len();
+            let initial_len = clients_cleanup.len();
+            clients_cleanup.retain(|_addr, last_seen| now.duration_since(*last_seen) < ttl);
+            let dropped = initial_len - clients_cleanup.len();
             if dropped > 0 {
                 debug!("UDP Cleanup: removed {} stale clients", dropped);
             }
