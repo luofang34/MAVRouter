@@ -28,7 +28,7 @@ use clap::Parser;
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::util::sync::CancellationToken;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 #[cfg(unix)]
