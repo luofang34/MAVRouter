@@ -86,7 +86,7 @@ pub struct GeneralConfig {
 }
 
 fn default_bus_capacity() -> usize {
-    1000
+    5000
 }
 
 impl Default for GeneralConfig {

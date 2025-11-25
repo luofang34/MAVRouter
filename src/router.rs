@@ -84,7 +84,9 @@ impl MessageBus {
 /// // Endpoints can now subscribe to this bus
 /// ```
 pub fn create_bus(capacity: usize) -> MessageBus {
-    let (tx, rx) = async_broadcast::broadcast(capacity);
+    let (mut tx, rx) = async_broadcast::broadcast(capacity);
+    // Allow overflow to drop oldest messages rather than blocking all producers
+    tx.set_overflow(true);
     MessageBus { tx, rx }
 }
 

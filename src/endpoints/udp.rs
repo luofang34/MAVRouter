@@ -130,14 +130,12 @@ pub async fn run(
                         let packet_len = cursor.position() as usize;
                         let raw_bytes = Bytes::copy_from_slice(&buf[..packet_len]);
                         // Use Core logic
-                        core_rx
-                            .handle_incoming_frame(MavlinkFrame {
-                                header,
-                                message,
-                                version,
-                                raw_bytes,
-                            })
-                            .await;
+                        core_rx.handle_incoming_frame(MavlinkFrame {
+                            header,
+                            message,
+                            version,
+                            raw_bytes,
+                        });
                     }
                 }
                 Err(e) => {

@@ -1,8 +1,8 @@
 [general]
 tcp_port = 5760
 log = "logs"
-log_telemetry = true
-bus_capacity = 10000
+log_telemetry = false
+bus_capacity = 20000
 
 # Stats configuration for testing (aggressive settings)
 stats_retention_secs = 60         # Keep only 60 seconds history

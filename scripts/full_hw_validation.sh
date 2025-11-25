@@ -82,6 +82,27 @@ run_test "Basic Connection (Heartbeat)" "tests/integration/verify_hardware.py" 3
 run_test "Command Roundtrip (TCP <-> Serial)" "tests/integration/verify_tx.py" 30 false
 run_test "UDP Broadcast (UDP <-> Serial)" "tests/integration/verify_udp.py" 30 false
 
+echo "--------------------------------------------------"
+echo "Restarting Router before Tier 2 to clear state..."
+pkill -f "target/release/mavrouter-rs" || true
+sleep 1
+RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
+# Wait for router's TCP port to be open again
+for i in $(seq 1 10); do
+    if nc -z 127.0.0.1 5760; then
+        echo "Router TCP port 5760 is open."
+        break
+    else
+        echo "Attempt $i: Router port not yet open, waiting..."
+        sleep 1
+    fi
+    if [ $i -eq 10 ]; then
+        echo "Error: Router TCP port 5760 did not become available within 10 seconds."
+        cat router_hw_val.log
+        exit 1
+    fi
+done
+
 echo "=== Tier 2: Important Validation (Should Pass) ==="
 run_test "Parameter Operations (Read/Write)" "tests/integration/verify_params.py" 45 false
 run_test "Multi-Client Support (TCP Broadcast)" "tests/integration/verify_multiclient.py" 30 false

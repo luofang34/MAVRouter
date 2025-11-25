@@ -117,9 +117,19 @@ impl EndpointCore {
     /// # Arguments
     ///
     /// * `frame` - The parsed `MavlinkFrame` containing header, message, and version.
-    pub async fn handle_incoming_frame(&self, frame: MavlinkFrame) {
+    pub fn handle_incoming_frame(&self, frame: MavlinkFrame) {
         // Cache message_id once (avoids repeated calls through Arc later)
         let message_id = frame.message.message_id();
+
+        // Reject invalid/placeholder sources (SysID 0) to avoid polluting routing/clients
+        if frame.header.system_id == 0 {
+            trace!(
+                "Dropping message with sysid 0 (msg_id {}) from endpoint {}",
+                message_id,
+                self.id
+            );
+            return;
+        }
 
         // 1. Check filters FIRST (avoid unnecessary work)
         if !self.filters.check_incoming(&frame.header, message_id) {
@@ -176,19 +186,15 @@ impl EndpointCore {
         let target = extract_target(&frame.message);
 
         // Send lightweight RoutedMessage (no Arc allocation - message_id cached)
-        if let Err(e) = self
-            .bus_tx
-            .broadcast(RoutedMessage {
-                source_id: self.id,
-                header: frame.header,
-                message_id,
-                version: frame.version,
-                timestamp_us,
-                serialized_bytes,
-                target,
-            })
-            .await
-        {
+        if let Err(e) = self.bus_tx.try_broadcast(RoutedMessage {
+            source_id: self.id,
+            header: frame.header,
+            message_id,
+            version: frame.version,
+            timestamp_us,
+            serialized_bytes,
+            target,
+        }) {
             warn!("Bus send error: {:?}", e);
         }
     }
@@ -308,7 +314,7 @@ where
                         Ok(n) => {
                             parser.push(&buf[..n]);
                             while let Some(frame) = parser.parse_next() {
-                                core_read.handle_incoming_frame(frame).await;
+                                core_read.handle_incoming_frame(frame);
                             }
                         }
                         Err(e) => {
@@ -340,7 +346,7 @@ where
                             }
 
                             // Optimistic batching - process a fixed batch to reduce wakeups
-                            const BATCH_SIZE: usize = 512;
+                            const BATCH_SIZE: usize = 1024;
                             for _ in 0..BATCH_SIZE {
                                 match bus_rx.try_recv() {
                                     Ok(m) => {
@@ -359,7 +365,7 @@ where
                                 }
                             }
 
-                            // Only flush when the queue is drained to avoid extra syscalls under load
+                            // Flush buffered writes; keep simple to avoid deadlocks in low traffic tests
                             if let Err(e) = writer.flush().await {
                                 debug!("{} flush error: {}", name, e);
                                 break;

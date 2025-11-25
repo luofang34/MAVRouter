@@ -167,11 +167,8 @@ def main():
         # Round 3: Extreme Load (10s, 100 clients, 20000 msg/s total)
         t3, m3 = run_load_round("Round 3: Extreme Load", 10, 100, 200)
 
-        threshold_r2 = 5000
-        # Baseline: ~9,000 msg/s with per-client EndpointId (required for correct multiclient routing)
-        # Per-client ID has ~20% overhead vs shared ID but is necessary for TCP server clients
-        # to correctly forward messages between each other
-        threshold_r3 = 9000
+        threshold_r2 = 7000
+        threshold_r3 = 11500
         max_mem_growth = 50.0
 
     elif args.profile == 'serial':
@@ -189,8 +186,8 @@ def main():
         # Exceeds bandwidth. Expect buffering/drops, but process should stay stable.
         t3, m3 = run_load_round("Round 3: Overload", 10, 1, 300)
 
-        threshold_r2 = 100 # Expect >= 100 msg/s (target 150)
-        threshold_r3 = 150 # Expect >= 150 msg/s even if target is 300 (saturation)
+        threshold_r2 = 140 # Expect >= 100 msg/s (target 150)
+        threshold_r3 = 250 # Expect >= 150 msg/s even if target is 300 (saturation)
         max_mem_growth = 20.0 # Stricter memory check for lower load
 
     print("\n=== Test Summary ===")
