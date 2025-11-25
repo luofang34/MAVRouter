@@ -200,9 +200,10 @@ impl Config {
         for (i, endpoint) in self.endpoint.iter().enumerate() {
             match endpoint {
                 EndpointConfig::Tcp { address, .. } | EndpointConfig::Udp { address, .. } => {
-                    let addr = address.parse::<std::net::SocketAddr>()
-                        .with_context(|| format!("Invalid address in endpoint {}: {}", i, address))?;
-                    
+                    let addr = address.parse::<std::net::SocketAddr>().with_context(|| {
+                        format!("Invalid address in endpoint {}: {}", i, address)
+                    })?;
+
                     if !ports.insert(addr.port()) {
                         anyhow::bail!("Duplicate port {} in endpoint {}", addr.port(), i);
                     }
@@ -210,7 +211,11 @@ impl Config {
                 EndpointConfig::Serial { device, baud, .. } => {
                     // Verify baud rate
                     if *baud < 300 || *baud > 4_000_000 {
-                        anyhow::bail!("Invalid baud rate in endpoint {}: {} (must be 300-4000000)", i, baud);
+                        anyhow::bail!(
+                            "Invalid baud rate in endpoint {}: {} (must be 300-4000000)",
+                            i,
+                            baud
+                        );
                     }
 
                     #[cfg(unix)]
@@ -228,14 +233,20 @@ impl Config {
             };
 
             // Helper closure to check msg_ids
-            let check_msg_ids = |ids: &std::collections::HashSet<u32>, type_str: &str| -> Result<()> {
-                for &msg_id in ids {
-                    if msg_id > 65535 {
-                        anyhow::bail!("Invalid {} msg_id in endpoint {}: {} (must be <= 65535)", type_str, i, msg_id);
+            let check_msg_ids =
+                |ids: &std::collections::HashSet<u32>, type_str: &str| -> Result<()> {
+                    for &msg_id in ids {
+                        if msg_id > 65535 {
+                            anyhow::bail!(
+                                "Invalid {} msg_id in endpoint {}: {} (must be <= 65535)",
+                                type_str,
+                                i,
+                                msg_id
+                            );
+                        }
                     }
-                }
-                Ok(())
-            };
+                    Ok(())
+                };
 
             check_msg_ids(&filters.allow_msg_id_out, "allow_out")?;
             check_msg_ids(&filters.block_msg_id_out, "block_out")?;

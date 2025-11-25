@@ -44,7 +44,10 @@ fn test_routing_table_stress_functional() {
 
     // Stress test: N operations should complete without panic
     let iterations = stress_iterations();
-    println!("Running test_routing_table_stress_functional with {} iterations", iterations);
+    println!(
+        "Running test_routing_table_stress_functional with {} iterations",
+        iterations
+    );
 
     for i in 0..iterations {
         let sys = ((i % 100) + 1) as u8;
@@ -65,7 +68,10 @@ fn test_routing_table_stress_functional() {
 fn test_dedup_memory_actually_bounded() {
     let mut dedup = Dedup::new(Duration::from_millis(100));
     let iterations = stress_iterations();
-    println!("Running test_dedup_memory_actually_bounded with {} iterations", iterations);
+    println!(
+        "Running test_dedup_memory_actually_bounded with {} iterations",
+        iterations
+    );
 
     // Insert N packets
     for i in 0..iterations {

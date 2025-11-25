@@ -440,11 +440,7 @@ where
     F: Fn() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    let mut backoff = ExponentialBackoff::new(
-        Duration::from_secs(1),
-        Duration::from_secs(30),
-        2.0,
-    );
+    let mut backoff = ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(30), 2.0);
 
     loop {
         tokio::select! {
@@ -455,7 +451,7 @@ where
             _ = async {
                 let start_time = std::time::Instant::now();
                 let result = task_factory().await;
-                
+
                 // If task ran for more than 60 seconds, reset backoff
                 if start_time.elapsed() > Duration::from_secs(60) {
                     backoff.reset();
@@ -471,9 +467,12 @@ where
                 }
             } => {}
         }
-        
+
         let wait = backoff.next_backoff();
-        info!("Supervisor: Waiting {:.1?} before restarting {}", wait, name);
+        info!(
+            "Supervisor: Waiting {:.1?} before restarting {}",
+            wait, name
+        );
         tokio::select! {
             _ = tokio::time::sleep(wait) => {},
             _ = cancel_token.cancelled() => {

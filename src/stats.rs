@@ -1,5 +1,5 @@
 //! Statistics history tracking for MAVLink router.
-//! 
+//!
 //! This module provides structures and methods to track and aggregate
 //! routing statistics over time windows.
 
@@ -9,9 +9,9 @@ use std::collections::VecDeque;
 /// Simple Stats buffer history
 pub struct StatsHistory {
     /// Recent N seconds samples
-    pub samples: VecDeque<RoutingStats>, 
+    pub samples: VecDeque<RoutingStats>,
     /// Max retention time in seconds
-    pub max_age_secs: u64,               
+    pub max_age_secs: u64,
 }
 
 impl StatsHistory {

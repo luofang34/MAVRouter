@@ -58,11 +58,11 @@ pub mod endpoints {
 pub mod dedup;
 /// Message filtering capabilities for endpoints.
 pub mod filter;
-/// Utility functions for MAVLink message processing.
-pub mod mavlink_utils;
 /// MAVLink message framing and parsing from byte streams.
 pub mod framing;
-/// Statistics history tracking and aggregation.
-pub mod stats;
+/// Utility functions for MAVLink message processing.
+pub mod mavlink_utils;
 /// Routing table implementation for MAVLink messages.
 pub mod routing;
+/// Statistics history tracking and aggregation.
+pub mod stats;

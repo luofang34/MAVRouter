@@ -134,10 +134,11 @@ jobs:
       - name: Run Python verification
         run: |
           cd tests/integration
+          set -e
           echo "Running Python integration tests..."
           for test in verify_udp.py stress_test.py verify_multiclient.py chaos_test.py fuzz_test.py loop_stress_test.py; do
             echo "Running $test..."
-            timeout 60 python3 "$test" || echo "⚠️ $test failed (acceptable)"
+            timeout 120 python3 "$test"
           done
         continue-on-error: false
       - name: Stop router

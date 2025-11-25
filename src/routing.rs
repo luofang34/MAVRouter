@@ -72,16 +72,24 @@ impl RoutingTable {
 
         // Enforce MAX_ROUTES limit
         if self.routes.len() >= MAX_ROUTES {
-            warn!("Route table at capacity ({}), forcing prune of 60s old entries", MAX_ROUTES);
+            warn!(
+                "Route table at capacity ({}), forcing prune of 60s old entries",
+                MAX_ROUTES
+            );
             self.prune(Duration::from_secs(60)); // Force cleanup of 1 minute old entries
         }
 
         // Enforce MAX_SYSTEMS limit
         if self.sys_routes.len() >= MAX_SYSTEMS {
-            warn!("System table at capacity ({}), removing oldest system", MAX_SYSTEMS);
-            let oldest_sys_entry = self.sys_routes.iter()
+            warn!(
+                "System table at capacity ({}), removing oldest system",
+                MAX_SYSTEMS
+            );
+            let oldest_sys_entry = self
+                .sys_routes
+                .iter()
                 .min_by_key(|(_, entry)| entry.last_seen);
-            
+
             if let Some((&oldest_sysid, _)) = oldest_sys_entry {
                 self.sys_routes.remove(&oldest_sysid);
                 // Remove all component routes associated with this system
@@ -138,7 +146,12 @@ impl RoutingTable {
     /// # Returns
     ///
     /// `true` if the message should be sent to `endpoint_id`, `false` otherwise.
-    pub fn should_send(&self, endpoint_id: EndpointId, target_sysid: u8, target_compid: u8) -> bool {
+    pub fn should_send(
+        &self,
+        endpoint_id: EndpointId,
+        target_sysid: u8,
+        target_compid: u8,
+    ) -> bool {
         if target_sysid == 0 {
             // MAV_BROADCAST_SYSTEM_ID
             return true;
@@ -188,7 +201,7 @@ impl RoutingTable {
         for entry in self.sys_routes.values() {
             unique_endpoints.extend(&entry.endpoints);
         }
-        
+
         RoutingStats {
             total_systems: self.sys_routes.len(),
             total_routes: self.routes.len(),
@@ -325,7 +338,7 @@ mod tests {
     fn test_no_unbounded_growth() {
         let mut rt = RoutingTable::new();
         let iterations = stress_iterations();
-        
+
         // Simulate updates with churn
         for i in 0..iterations {
             // Endpoint ID 1-100 rotating
@@ -334,27 +347,36 @@ mod tests {
             let sys = ((i % 250) + 1) as u8;
             // Component ID 1-250 rotating
             let comp = ((i % 250) + 1) as u8;
-            
+
             rt.update(endpoint, sys, comp);
-            
+
             // Prune frequently to simulate aggressive cleanup
             if i % 1000 == 0 {
                 // Prune everything older than 1ms (should clear almost all)
             }
         }
-        
+
         // Verify stats after run
         let stats = rt.stats();
         // Max unique (sys, comp) combinations is 250 * 250 = 62,500
-        assert!(stats.total_routes <= 62500, "Total routes exceeded max possible unique keys");
-        
+        assert!(
+            stats.total_routes <= 62500,
+            "Total routes exceeded max possible unique keys"
+        );
+
         // Now simulate time passing and pruning
         std::thread::sleep(Duration::from_millis(10));
         rt.prune(Duration::from_millis(1)); // Prune everything older than 1ms
-        
+
         let stats_after_prune = rt.stats();
-        assert_eq!(stats_after_prune.total_routes, 0, "Pruning should clear expired routes");
-        assert_eq!(stats_after_prune.total_systems, 0, "Pruning should clear expired systems");
+        assert_eq!(
+            stats_after_prune.total_routes, 0,
+            "Pruning should clear expired routes"
+        );
+        assert_eq!(
+            stats_after_prune.total_systems, 0,
+            "Pruning should clear expired systems"
+        );
     }
 
     #[test]
@@ -419,12 +441,12 @@ mod tests {
         }
 
         // Trigger capacity limit logic (by calling update many times)
-        // Since we can't mock time easily here to make them "old", 
+        // Since we can't mock time easily here to make them "old",
         // this test mainly verifies the code path runs without error.
         for i in 0..MAX_ROUTES {
-             rt.update(EndpointId(2), ((i % 250) + 1) as u8, 1);
+            rt.update(EndpointId(2), ((i % 250) + 1) as u8, 1);
         }
-        
+
         let stats = rt.stats();
         assert!(stats.total_routes > 0);
     }

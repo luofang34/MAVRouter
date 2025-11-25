@@ -61,8 +61,11 @@ impl StreamParser {
         let new_len = self.buffer.len() + data.len();
         if new_len > MAX_BUFFER_SIZE {
             let overflow = new_len - MAX_BUFFER_SIZE;
-            warn!("StreamParser buffer full, dropping {} oldest bytes to make room", overflow);
-            
+            warn!(
+                "StreamParser buffer full, dropping {} oldest bytes to make room",
+                overflow
+            );
+
             if overflow <= self.buffer.len() {
                 self.buffer.advance(overflow);
             } else {

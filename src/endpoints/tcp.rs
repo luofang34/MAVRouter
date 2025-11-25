@@ -108,11 +108,8 @@ pub async fn run(
         }
         crate::config::EndpointMode::Client => {
             info!("Connecting to TCP server at {}", address);
-            let mut backoff = ExponentialBackoff::new(
-                Duration::from_secs(1),
-                Duration::from_secs(60),
-                2.0,
-            );
+            let mut backoff =
+                ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 2.0);
 
             loop {
                 if token.is_cancelled() {
