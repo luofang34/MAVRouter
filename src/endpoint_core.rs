@@ -96,6 +96,14 @@ impl EndpointCore {
     ///
     /// * `frame` - The parsed `MavlinkFrame` containing header, message, and version.
     pub fn handle_incoming_frame(&self, frame: MavlinkFrame) {
+        // 1. Check filters FIRST (avoid unnecessary serialization)
+        if !self
+            .filters
+            .check_incoming(&frame.header, frame.message.message_id())
+        {
+            return; // Message filtered out, ignore
+        }
+
         let mut temp_buf = Vec::new();
         if let Err(e) = match frame.version {
             MavlinkVersion::V2 => {
@@ -109,54 +117,51 @@ impl EndpointCore {
             return;
         }
 
-        let is_dup = {
-            let mut dd = self.dedup.lock();
-            dd.is_duplicate(&temp_buf)
-        };
+        // 2. Check if it's a duplicate
+        if self.dedup.lock().is_duplicate(&temp_buf) {
+            return; // It's a duplicate, ignore
+        }
 
-        if !is_dup
-            && self
-                .filters
-                .check_incoming(&frame.header, frame.message.message_id())
+        // Message is not a duplicate and passed filters, so insert it into Dedup
+        self.dedup.lock().insert(&temp_buf);
+
         {
-            {
-                let now = Instant::now();
+            let now = Instant::now();
 
-                // Only acquire write lock if the route actually needs updating
-                let needs_update = {
-                    let rt = self.routing_table.read();
-                    rt.needs_update(frame.header.system_id, frame.header.component_id, now)
-                };
+            // Only acquire write lock if the route actually needs updating
+            let needs_update = {
+                let rt = self.routing_table.read();
+                rt.needs_update(frame.header.system_id, frame.header.component_id, now)
+            };
 
-                if needs_update {
-                    let mut rt = self.routing_table.write();
-                    rt.update(
-                        self.id,
-                        frame.header.system_id,
-                        frame.header.component_id,
-                        now,
-                    );
-                }
+            if needs_update {
+                let mut rt = self.routing_table.write();
+                rt.update(
+                    self.id,
+                    frame.header.system_id,
+                    frame.header.component_id,
+                    now,
+                );
             }
+        }
 
-            let timestamp_us = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or(Duration::from_secs(0))
-                .as_micros() as u64;
+        let timestamp_us = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_secs(0))
+            .as_micros() as u64;
 
-            // Reuse serialized bytes
-            let serialized_bytes = Arc::new(temp_buf);
+        // Reuse serialized bytes
+        let serialized_bytes = Arc::new(temp_buf);
 
-            if let Err(e) = self.bus_tx.send(RoutedMessage {
-                source_id: self.id,
-                header: frame.header,
-                message: Arc::new(frame.message),
-                version: frame.version,
-                timestamp_us,
-                serialized_bytes,
-            }) {
-                warn!("Bus send error: {}", e);
-            }
+        if let Err(e) = self.bus_tx.send(RoutedMessage {
+            source_id: self.id,
+            header: frame.header,
+            message: Arc::new(frame.message),
+            version: frame.version,
+            timestamp_us,
+            serialized_bytes,
+        }) {
+            warn!("Bus send error: {}", e);
         }
     }
 
@@ -301,7 +306,14 @@ where
                             }
 
                             // Optimistic batching
-                            for _ in 0..10 {
+                            let queue_depth = bus_rx.len();
+                            let batch_size = match queue_depth {
+                                0..=10 => 5,
+                                11..=100 => 20,
+                                101..=500 => 50,
+                                _ => 100,
+                            };
+                            for _ in 0..batch_size {
                                 match bus_rx.try_recv() {
                                     Ok(m) => {
                                         if core.check_outgoing(&m) {

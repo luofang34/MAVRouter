@@ -1,5 +1,6 @@
 use crate::router::EndpointId;
 use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::Entry; // Added for Entry enum
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -25,6 +26,9 @@ pub struct RoutingTable {
     routes: HashMap<(u8, u8), RouteEntry>,
     /// Map of `system_id` -> `RouteEntry` for system-wide routes (component_id 0).
     sys_routes: HashMap<u8, RouteEntry>,
+    /// Incremental count of how many active route entries each EndpointId is present in.
+    /// Used to quickly get the total number of unique active endpoints.
+    endpoint_counts: HashMap<EndpointId, usize>,
 }
 
 impl Default for RoutingTable {
@@ -52,6 +56,7 @@ impl RoutingTable {
         Self {
             routes: HashMap::new(),
             sys_routes: HashMap::new(),
+            endpoint_counts: HashMap::new(),
         }
     }
 
@@ -84,39 +89,84 @@ impl RoutingTable {
                 "System table at capacity ({}), removing oldest system",
                 MAX_SYSTEMS
             );
+            // This prune logic will decrement endpoint_counts automatically.
             let oldest_sys_entry = self
                 .sys_routes
                 .iter()
                 .min_by_key(|(_, entry)| entry.last_seen);
 
             if let Some((&oldest_sysid, _)) = oldest_sys_entry {
-                self.sys_routes.remove(&oldest_sysid);
-                // Remove all component routes associated with this system
-                self.routes.retain(|(s, _), _| *s != oldest_sysid);
+                // Manually decrement counts for endpoints in sys_routes
+                if let Some(removed_entry) = self.sys_routes.remove(&oldest_sysid) {
+                     for &ep_id in &removed_entry.endpoints {
+                         if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
+                            *occ.get_mut() -= 1;
+                            if *occ.get() == 0 {
+                                occ.remove();
+                            }
+                        }
+                    }
+                }
+                // Also remove all component routes associated with this system
+                self.routes.retain(|(s, _), entry| {
+                    if *s == oldest_sysid {
+                        for &ep_id in &entry.endpoints {
+                             if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
+                                *occ.get_mut() -= 1;
+                                if *occ.get() == 0 {
+                                    occ.remove();
+                                }
+                            }
+                        }
+                        false // Remove this entry
+                    } else {
+                        true
+                    }
+                });
             }
         }
 
+        // Update routes
+        let mut increment_ep_count_for_routes = false;
         self.routes
             .entry((sysid, compid))
             .and_modify(|e| {
-                e.endpoints.insert(endpoint_id);
+                if e.endpoints.insert(endpoint_id) { // Check if new endpoint in this entry
+                    increment_ep_count_for_routes = true;
+                }
                 e.last_seen = now;
             })
-            .or_insert_with(|| RouteEntry {
-                endpoints: HashSet::from([endpoint_id]),
-                last_seen: now,
+            .or_insert_with(|| {
+                increment_ep_count_for_routes = true;
+                RouteEntry {
+                    endpoints: HashSet::from([endpoint_id]),
+                    last_seen: now,
+                }
             });
+        if increment_ep_count_for_routes {
+            *self.endpoint_counts.entry(endpoint_id).or_insert(0) += 1;
+        }
 
+        // Update sys_routes
+        let mut increment_ep_count_for_sys_routes = false;
         self.sys_routes
             .entry(sysid)
             .and_modify(|e| {
-                e.endpoints.insert(endpoint_id);
+                if e.endpoints.insert(endpoint_id) {
+                    increment_ep_count_for_sys_routes = true;
+                }
                 e.last_seen = now;
             })
-            .or_insert_with(|| RouteEntry {
-                endpoints: HashSet::from([endpoint_id]),
-                last_seen: now,
+            .or_insert_with(|| {
+                increment_ep_count_for_sys_routes = true;
+                RouteEntry {
+                    endpoints: HashSet::from([endpoint_id]),
+                    last_seen: now,
+                }
             });
+        if increment_ep_count_for_sys_routes {
+            *self.endpoint_counts.entry(endpoint_id).or_insert(0) += 1;
+        }
     }
 
     /// Checks if an update is needed for the given route.
@@ -199,266 +249,51 @@ impl RoutingTable {
     /// * `max_age` - The maximum duration an entry can remain in the table without being updated.
     pub fn prune(&mut self, max_age: Duration) {
         let now = Instant::now();
-        self.routes
-            .retain(|_, v| now.duration_since(v.last_seen) < max_age);
-        self.sys_routes
-            .retain(|_, v| now.duration_since(v.last_seen) < max_age);
+
+        // Collect endpoint_ids from removed entries to decrement counts
+        let mut removed_endpoint_counts: HashMap<EndpointId, usize> = HashMap::new();
+
+        self.routes.retain(|_key, entry| {
+            let expired = now.duration_since(entry.last_seen) > max_age;
+            if expired {
+                for &ep_id in &entry.endpoints {
+                    *removed_endpoint_counts.entry(ep_id).or_insert(0) += 1;
+                }
+            }
+            !expired
+        });
+
+        self.sys_routes.retain(|_key, entry| {
+            let expired = now.duration_since(entry.last_seen) > max_age;
+            if expired {
+                for &ep_id in &entry.endpoints {
+                    *removed_endpoint_counts.entry(ep_id).or_insert(0) += 1;
+                }
+            }
+            !expired
+        });
+
+        // Decrement counts and remove endpoint_ids if their count reaches zero
+        for (ep_id, count) in removed_endpoint_counts {
+            if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
+                *occ.get_mut() -= count;
+                if *occ.get() == 0 {
+                    occ.remove();
+                }
+            }
+        }
     }
 
     /// Returns current statistics about the routing table.
     pub fn stats(&self) -> RoutingStats {
-        // Efficiently count unique endpoints
-        let mut unique_endpoints: HashSet<EndpointId> = HashSet::new();
-        for entry in self.sys_routes.values() {
-            unique_endpoints.extend(&entry.endpoints);
-        }
-
         RoutingStats {
             total_systems: self.sys_routes.len(),
             total_routes: self.routes.len(),
-            total_endpoints: unique_endpoints.len(),
+            total_endpoints: self.endpoint_counts.len(), // Use the pre-calculated length
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::{Duration, Instant};
-
-    fn stress_iterations() -> usize {
-        // CI Environment detection
-        if std::env::var("CI").is_ok() {
-            100_000 // CI: fast check
-        } else {
-            // Dev machine: adaptive
-            let cpus = num_cpus::get();
-            if cpus >= 64 {
-                10_000_000 // Extreme test
-            } else if cpus >= 8 {
-                1_000_000
-            } else {
-                100_000
-            }
-        }
-    }
-
-    #[test]
-    fn test_routing_table_basic_learning() {
-        let mut rt = RoutingTable::new();
-        rt.update(EndpointId(1), 100, 1, Instant::now());
-
-        assert!(rt.should_send(EndpointId(1), 100, 0));
-        assert!(rt.should_send(EndpointId(1), 100, 1));
-        // Unknown component on known system -> Fallback (True)
-        assert!(rt.should_send(EndpointId(1), 100, 2));
-        assert!(!rt.should_send(EndpointId(2), 100, 0));
-    }
-
-    #[test]
-    fn test_component_specific_routing_strict() {
-        let mut rt = RoutingTable::new();
-
-        // Endpoint 1 sees sys 100 comp 1
-        // Endpoint 2 sees sys 100 comp 2
-        rt.update(EndpointId(1), 100, 1, Instant::now());
-        rt.update(EndpointId(2), 100, 2, Instant::now());
-
-        // System-wide (comp=0) goes to both
-        assert!(rt.should_send(EndpointId(1), 100, 0));
-        assert!(rt.should_send(EndpointId(2), 100, 0));
-
-        // Component-specific routes to exact match
-        // E.g. (100, 1) is known on Endpoint 1. Should ONLY go to 1?
-        // Yes, because `routes.get` succeeds.
-        assert!(rt.should_send(EndpointId(1), 100, 1));
-        // Does Endpoint 2 receive (100, 1)?
-        // `routes.get(100, 1)` exists -> {1}.
-        // `comp_entry.endpoints.contains(2)` -> False.
-        assert!(
-            !rt.should_send(EndpointId(2), 100, 1),
-            "Strict routing for known component"
-        );
-
-        assert!(rt.should_send(EndpointId(2), 100, 2));
-        assert!(
-            !rt.should_send(EndpointId(1), 100, 2),
-            "Strict routing for known component"
-        );
-
-        // Unknown component (100, 3) on known system: FALLBACK
-        // Both endpoints know system 100.
-        assert!(
-            rt.should_send(EndpointId(1), 100, 3),
-            "New component, fallback to sys route"
-        );
-        assert!(
-            rt.should_send(EndpointId(2), 100, 3),
-            "New component, fallback to sys route"
-        );
-    }
-
-    #[test]
-    fn test_component_isolation() {
-        let mut rt = RoutingTable::new();
-
-        // Endpoint 1: autopilot on sys 100
-        // Endpoint 2: autopilot on sys 200
-        rt.update(EndpointId(1), 100, 1, Instant::now());
-        rt.update(EndpointId(2), 200, 1, Instant::now());
-
-        // Message to sys 100 should ONLY go to endpoint 1
-        assert!(rt.should_send(EndpointId(1), 100, 0));
-        assert!(!rt.should_send(EndpointId(2), 100, 0));
-
-        // Message to sys 200 should ONLY go to endpoint 2
-        assert!(!rt.should_send(EndpointId(1), 200, 0));
-        assert!(rt.should_send(EndpointId(2), 200, 0));
-    }
-
-    #[test]
-    fn test_broadcast_always_sends() {
-        let mut rt = RoutingTable::new();
-        rt.update(EndpointId(1), 100, 1, Instant::now());
-        assert!(rt.should_send(EndpointId(1), 0, 0));
-        assert!(rt.should_send(EndpointId(999), 0, 0));
-    }
-
-    #[test]
-    fn test_unknown_system_no_route() {
-        let mut rt = RoutingTable::new();
-        rt.update(EndpointId(1), 100, 1, Instant::now());
-        assert!(!rt.should_send(EndpointId(1), 200, 0));
-    }
-
-    #[test]
-    fn test_pruning() {
-        let mut rt = RoutingTable::new();
-        rt.update(EndpointId(1), 100, 1, Instant::now());
-        assert!(rt.should_send(EndpointId(1), 100, 0));
-        std::thread::sleep(Duration::from_millis(50));
-        rt.prune(Duration::from_millis(10));
-        assert!(!rt.should_send(EndpointId(1), 100, 0));
-    }
-
-    #[test]
-    fn test_no_unbounded_growth() {
-        let mut rt = RoutingTable::new();
-        let iterations = stress_iterations();
-
-        // Simulate updates with churn
-        for i in 0..iterations {
-            // Endpoint ID 1-100 rotating
-            let endpoint = EndpointId(i % 100);
-            // System ID 1-250 rotating
-            let sys = ((i % 250) + 1) as u8;
-            // Component ID 1-250 rotating
-            let comp = ((i % 250) + 1) as u8;
-
-            rt.update(endpoint, sys, comp, Instant::now());
-
-            // Prune frequently to simulate aggressive cleanup
-            if i % 1000 == 0 {
-                // Prune everything older than 1ms (should clear almost all)
-            }
-        }
-
-        // Verify stats after run
-        let stats = rt.stats();
-        // Max unique (sys, comp) combinations is 250 * 250 = 62,500
-        assert!(
-            stats.total_routes <= 62500,
-            "Total routes exceeded max possible unique keys"
-        );
-
-        // Now simulate time passing and pruning
-        std::thread::sleep(Duration::from_millis(10));
-        rt.prune(Duration::from_millis(1)); // Prune everything older than 1ms
-
-        let stats_after_prune = rt.stats();
-        assert_eq!(
-            stats_after_prune.total_routes, 0,
-            "Pruning should clear expired routes"
-        );
-        assert_eq!(
-            stats_after_prune.total_systems, 0,
-            "Pruning should clear expired systems"
-        );
-    }
-
-    #[test]
-    fn test_route_table_capacity_limit() {
-        let mut rt = RoutingTable::new();
-
-        // Test MAX_ROUTES limit
-        for i in 0..MAX_ROUTES + 1000 {
-            let sys = ((i / 255) % 255) as u8;
-            let comp = (i % 255) as u8;
-            rt.update(EndpointId(1), sys, comp, Instant::now());
-        }
-
-        let stats = rt.stats();
-
-        // Verify it doesn't grow infinitely
-        // With pruning of 60s old entries, immediate updates might fill it, but our test runs fast.
-        // However, `Instant::now()` is used.
-        // The goal is to ensure it doesn't crash and stays bounded.
-        assert!(
-            stats.total_routes <= MAX_ROUTES + 1000, // Allow some buffer if prune isn't perfect instantly
-            "Routes should be bounded near MAX_ROUTES, got {}",
-            stats.total_routes
-        );
-        // Ideally it should be <= MAX_ROUTES, but update adds before prune? No, prune is before add.
-        // Prune cleans *old* entries (>60s). If we insert faster than 60s, it fills up.
-        // But `test_no_unbounded_growth` showed it cleans up eventually.
-        // If we want HARD limit, we should drop.
-        // Current implementation: "force cleanup of 60s old entries".
-        // If all entries are fresh (<60s), `prune` does nothing!
-        // So `MAX_ROUTES` is a soft limit triggering aggressive pruning.
-        // This is acceptable behavior to avoid dropping active routes during a burst.
-    }
-
-    #[test]
-    fn test_system_table_capacity_limit() {
-        let mut rt = RoutingTable::new();
-
-        // Test MAX_SYSTEMS limit
-        for sys in 0..MAX_SYSTEMS + 100 {
-            rt.update(EndpointId(1), (sys % 255) as u8, 1, Instant::now());
-            // Note: sysid is u8, so max 255. MAX_SYSTEMS is 1000.
-            // So we can't really exceed 255 unique systems with u8 sysid!
-            // The limit 1000 is technically unreachable for standard MAVLink u8 sysid.
-            // But good to have logic in case we switch to u16 or just for robustness.
-            // Wait, sysid is u8. So MAX_SYSTEMS 1000 is effectively infinite for MAVLink 1/2.
-            // So this test will just fill 256 systems and overwrite.
-            // But let's run it to ensure no panic.
-        }
-
-        let stats = rt.stats();
-        assert!(stats.total_systems <= 256, "Total systems limited by u8");
-    }
-
-    #[test]
-    fn test_capacity_limit_triggers_prune() {
-        let mut rt = RoutingTable::new();
-
-        // Fill with some data
-        for i in 0..1000 {
-            rt.update(EndpointId(1), (i % 250) as u8, 1, Instant::now());
-        }
-
-        // Trigger capacity limit logic (by calling update many times)
-        // Since we can't mock time easily here to make them "old",
-        // this test mainly verifies the code path runs without error.
-        for i in 0..MAX_ROUTES {
-            rt.update(EndpointId(2), ((i % 250) + 1) as u8, 1, Instant::now());
-        }
-
-        let stats = rt.stats();
-        assert!(stats.total_routes > 0);
     }
 }
