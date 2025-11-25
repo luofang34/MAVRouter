@@ -121,13 +121,22 @@ impl EndpointCore {
         {
             {
                 let now = Instant::now();
-                let mut rt = self.routing_table.write();
-                rt.update(
-                    self.id,
-                    frame.header.system_id,
-                    frame.header.component_id,
-                    now,
-                );
+
+                // Only acquire write lock if the route actually needs updating
+                let needs_update = {
+                    let rt = self.routing_table.read();
+                    rt.needs_update(frame.header.system_id, frame.header.component_id, now)
+                };
+
+                if needs_update {
+                    let mut rt = self.routing_table.write();
+                    rt.update(
+                        self.id,
+                        frame.header.system_id,
+                        frame.header.component_id,
+                        now,
+                    );
+                }
             }
 
             let timestamp_us = SystemTime::now()
