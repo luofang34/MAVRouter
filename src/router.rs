@@ -78,7 +78,7 @@ impl MessageBus {
 /// # Example
 ///
 /// ```
-/// use mavrouter_rs::router;
+/// use mavrouter::router;
 ///
 /// let bus = router::create_bus(1000);
 /// // Endpoints can now subscribe to this bus
