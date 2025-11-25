@@ -104,6 +104,7 @@ pub async fn run(
                     _ = token.cancelled() => break,
                 }
             }
+            join_set.shutdown().await;
             Ok(())
         }
         crate::config::EndpointMode::Client => {
