@@ -23,6 +23,7 @@ pub struct RoutedMessage {
     /// The actual MAVLink message payload.
     pub message: Arc<MavMessage>,
     /// The MAVLink protocol version used for this message (V1 or V2).
+    #[allow(dead_code)]
     pub version: MavlinkVersion,
     /// Arrival timestamp in microseconds since UNIX EPOCH.
     pub timestamp_us: u64,

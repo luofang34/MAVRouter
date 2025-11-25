@@ -124,9 +124,9 @@ impl RoutingTable {
     #[allow(dead_code)] // This function is used in src/endpoint_core.rs
     pub fn needs_update(&self, sysid: u8, compid: u8, now: Instant) -> bool {
         let comp_fresh = self.routes.get(&(sysid, compid))
-            .map_or(false, |e| now.duration_since(e.last_seen) < Duration::from_secs(1));
+            .is_some_and(|e| now.duration_since(e.last_seen) < Duration::from_secs(1));
         let sys_fresh = self.sys_routes.get(&sysid)
-            .map_or(false, |e| now.duration_since(e.last_seen) < Duration::from_secs(1));
+            .is_some_and(|e| now.duration_since(e.last_seen) < Duration::from_secs(1));
 
         !(comp_fresh && sys_fresh)
     }
