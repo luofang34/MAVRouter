@@ -8,6 +8,7 @@
 
 use bytes::{Buf, BytesMut};
 use mavlink::{MavHeader, MavlinkVersion};
+use memchr::memchr2; // Added memchr2 import
 use std::io::Cursor;
 use tracing::warn;
 
@@ -92,15 +93,8 @@ impl StreamParser {
                 return None;
             }
 
-            // 1. Search for STX (Magic Byte)
-            let mut start_idx = None;
-            for (i, &b) in self.buffer.iter().enumerate() {
-                // MAVLink 1: 0xFE, MAVLink 2: 0xFD
-                if b == 0xFD || b == 0xFE {
-                    start_idx = Some(i);
-                    break;
-                }
-            }
+            // 1. Search for STX (Magic Byte) using memchr2 for performance
+            let start_idx = memchr2(0xFD, 0xFE, &self.buffer);
 
             if let Some(idx) = start_idx {
                 if idx > 0 {

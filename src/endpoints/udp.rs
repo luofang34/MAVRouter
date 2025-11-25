@@ -15,9 +15,10 @@ use crate::framing::MavlinkFrame;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use anyhow::{Context, Result};
-use mavlink::MavlinkVersion;
-use parking_lot::{Mutex, RwLock}; // Re-added
 use dashmap::DashMap;
+use futures::future::join_all; // Added join_all
+use mavlink::MavlinkVersion;
+use parking_lot::{Mutex, RwLock};
 use std::io::Cursor;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
@@ -158,8 +159,13 @@ pub async fn run(
                         }
                     } else {
                         let targets: Vec<SocketAddr> = clients_send.iter().map(|r| *r.key()).collect();
-                        for client in targets {
-                            if let Err(e) = s_socket.send_to(&packet_data, client).await {
+                        let sends: Vec<_> = targets.iter().map(|client| {
+                            s_socket.send_to(&packet_data, *client)
+                        }).collect();
+
+                        let results = join_all(sends).await;
+                        for (client, res) in targets.into_iter().zip(results) {
+                            if let Err(e) = res {
                                 warn!("UDP broadcast error to {}: {}", client, e);
                             }
                         }
