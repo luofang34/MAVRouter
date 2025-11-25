@@ -121,20 +121,14 @@ impl RoutingTable {
 
     /// Checks if an update is needed for the given route.
     /// An update is needed if the route is unknown or the last update was more than 1 second ago.
+    #[allow(dead_code)] // This function is used in src/endpoint_core.rs
     pub fn needs_update(&self, sysid: u8, compid: u8, now: Instant) -> bool {
-        if let Some(entry) = self.routes.get(&(sysid, compid)) {
-            if now.duration_since(entry.last_seen) > Duration::from_secs(1) {
-                return true;
-            }
-            // Check system route as well
-            if let Some(sys_entry) = self.sys_routes.get(&sysid) {
-                if now.duration_since(sys_entry.last_seen) > Duration::from_secs(1) {
-                    return true;
-                }
-            }
-            return false;
-        }
-        true
+        let comp_fresh = self.routes.get(&(sysid, compid))
+            .map_or(false, |e| now.duration_since(e.last_seen) < Duration::from_secs(1));
+        let sys_fresh = self.sys_routes.get(&sysid)
+            .map_or(false, |e| now.duration_since(e.last_seen) < Duration::from_secs(1));
+
+        !(comp_fresh && sys_fresh)
     }
 
     /// Determines if a message targeting `(target_sysid, target_compid)`
