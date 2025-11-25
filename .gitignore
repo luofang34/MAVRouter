@@ -15,3 +15,7 @@ logs/
 router_*.log
 
 *.txt
+*.pid
+
+# CI configuration temp files
+ci_config.toml
