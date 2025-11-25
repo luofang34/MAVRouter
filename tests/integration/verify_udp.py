@@ -1,8 +1,30 @@
 import sys
 import time
+import threading
 from pymavlink import mavutil
 
+def autopilot_simulator():
+    """Simulates a drone sending heartbeats via TCP"""
+    try:
+        # Allow some time for main thread to start
+        time.sleep(0.5)
+        # Connect as SysID 1
+        master = mavutil.mavlink_connection('tcp:127.0.0.1:5760', source_system=1)
+        while True:
+            master.mav.heartbeat_send(
+                mavutil.mavlink.MAV_TYPE_QUADROTOR,
+                mavutil.mavlink.MAV_AUTOPILOT_PX4,
+                0, 0, 0
+            )
+            time.sleep(0.5)
+    except Exception as e:
+        print(f"Simulator error: {e}")
+
 def main():
+    # Start simulator
+    sim_thread = threading.Thread(target=autopilot_simulator, daemon=True)
+    sim_thread.start()
+
     print("Connecting via UDP to router...")
     master = mavutil.mavlink_connection('udpout:127.0.0.1:14550', source_system=254)
 
