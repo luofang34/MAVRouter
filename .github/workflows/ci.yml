@@ -168,7 +168,17 @@ jobs:
         uses: taiki-e/install-action@cargo-tarpaulin
       - name: Generate coverage report
         run: cargo tarpaulin --out Xml
+      - name: Check minimum coverage
+        run: |
+          # Extract coverage percentage from tarpaulin output
+          COVERAGE=$(cargo tarpaulin --out Json 2>/dev/null | jq '.files | to_entries | map(.value.coverage | select(. != null)) | add / length')
+          echo "Coverage: $COVERAGE%"
+          if (( $(echo "$COVERAGE < 60" | bc -l) )); then
+            echo "❌ Coverage $COVERAGE% is below 60% threshold"
+            exit 1
+          fi
+          echo "✅ Coverage $COVERAGE% meets minimum requirement"
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          fail_ci_if_error: false
+          fail_ci_if_error: true

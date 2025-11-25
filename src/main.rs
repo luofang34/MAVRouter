@@ -376,10 +376,10 @@ async fn main() -> Result<()> {
         }
 
         for (i, endpoint_config) in config.endpoint.iter().enumerate() {
+            let bus = bus.clone();
             let bus_tx = bus.clone();
-            let bus_rx = bus.subscribe();
-            let rt = routing_table.clone();
-            let dd = dedup.clone();
+            let routing_table = routing_table.clone();
+            let dedup = dedup.clone();
             let task_token = cancel_token.child_token();
 
             match endpoint_config {
@@ -389,38 +389,27 @@ async fn main() -> Result<()> {
                     filters,
                 } => {
                     let name = format!("UDP Endpoint {} ({})", i, address);
-                    let addr = address.clone();
-                    let m = mode.clone();
-                    let f = filters.clone();
+                    let address = address.clone();
+                    let mode = mode.clone();
+                    let filters = filters.clone();
                     let cleanup_ttl = prune_ttl;
 
                     handles.push(tokio::spawn(supervise(
                         name,
                         task_token.clone(),
                         move || {
-                            let bus_tx = bus_tx.clone();
-                            let bus_rx = bus_rx.resubscribe();
-                            let rt = rt.clone();
-                            let dd = dd.clone();
-                            let f = f.clone();
-                            let addr = addr.clone();
-                            let m = m.clone();
-                            let token = task_token.clone();
-                            async move {
-                                crate::endpoints::udp::run(
-                                    i,
-                                    addr,
-                                    m,
-                                    bus_tx,
-                                    bus_rx,
-                                    rt,
-                                    dd,
-                                    f,
-                                    token,
-                                    cleanup_ttl,
-                                )
-                                .await
-                            }
+                            crate::endpoints::udp::run(
+                                i,
+                                address.clone(),
+                                mode.clone(),
+                                bus_tx.clone(),
+                                bus.subscribe(),
+                                routing_table.clone(),
+                                dedup.clone(),
+                                filters.clone(),
+                                task_token.clone(),
+                                cleanup_ttl,
+                            )
                         },
                     )));
                 }
@@ -430,28 +419,25 @@ async fn main() -> Result<()> {
                     filters,
                 } => {
                     let name = format!("TCP Endpoint {} ({})", i, address);
-                    let addr = address.clone();
-                    let m = mode.clone();
-                    let f = filters.clone();
+                    let address = address.clone();
+                    let mode = mode.clone();
+                    let filters = filters.clone();
 
                     handles.push(tokio::spawn(supervise(
                         name,
                         task_token.clone(),
                         move || {
-                            let bus_tx = bus_tx.clone();
-                            let bus_rx = bus_rx.resubscribe();
-                            let rt = rt.clone();
-                            let dd = dd.clone();
-                            let f = f.clone();
-                            let addr = addr.clone();
-                            let m = m.clone();
-                            let token = task_token.clone();
-                            async move {
-                                crate::endpoints::tcp::run(
-                                    i, addr, m, bus_tx, bus_rx, rt, dd, f, token,
-                                )
-                                .await
-                            }
+                            crate::endpoints::tcp::run(
+                                i,
+                                address.clone(),
+                                mode.clone(),
+                                bus_tx.clone(),
+                                bus.subscribe(),
+                                routing_table.clone(),
+                                dedup.clone(),
+                                filters.clone(),
+                                task_token.clone(),
+                            )
                         },
                     )));
                 }
@@ -461,27 +447,25 @@ async fn main() -> Result<()> {
                     filters,
                 } => {
                     let name = format!("Serial Endpoint {} ({})", i, device);
-                    let dev = device.clone();
-                    let b = *baud;
-                    let f = filters.clone();
+                    let device = device.clone();
+                    let baud = *baud;
+                    let filters = filters.clone();
 
                     handles.push(tokio::spawn(supervise(
                         name,
                         task_token.clone(),
                         move || {
-                            let bus_tx = bus_tx.clone();
-                            let bus_rx = bus_rx.resubscribe();
-                            let rt = rt.clone();
-                            let dd = dd.clone();
-                            let f = f.clone();
-                            let dev = dev.clone();
-                            let token = task_token.clone();
-                            async move {
-                                crate::endpoints::serial::run(
-                                    i, dev, b, bus_tx, bus_rx, rt, dd, f, token,
-                                )
-                                .await
-                            }
+                            crate::endpoints::serial::run(
+                                i,
+                                device.clone(),
+                                baud,
+                                bus_tx.clone(),
+                                bus.subscribe(),
+                                routing_table.clone(),
+                                dedup.clone(),
+                                filters.clone(),
+                                task_token.clone(),
+                            )
                         },
                     )));
                 }
