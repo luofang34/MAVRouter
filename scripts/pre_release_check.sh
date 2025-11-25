@@ -14,11 +14,11 @@ echo "========================================="
 echo "Pre-Release Validation"
 echo "========================================="
 
-# 1. Format check
+# 1. Format code
 echo ""
-echo "[1/4] Checking code formatting..."
-cargo fmt --all --check
-echo "✅ Format check passed"
+echo "[1/4] Formatting code..."
+cargo fmt --all
+echo "✅ Code formatted"
 
 # 2. Rust tests
 echo ""

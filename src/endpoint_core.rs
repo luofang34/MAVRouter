@@ -221,6 +221,13 @@ impl EndpointCore {
         }
 
         let target = extract_target(&msg.message);
+
+        // Optimization: If target is broadcast (system_id == 0), we don't need the routing table lock.
+        // We always broadcast unless filtered above or source check fails.
+        if target.system_id == 0 {
+            return true;
+        }
+
         let rt = self.routing_table.read();
         let should_send = rt.should_send(self.id, target.system_id, target.component_id);
 
@@ -332,13 +339,14 @@ where
                                 break;
                             }
 
-                            // Optimistic batching
+                            // Optimistic batching - larger batches for higher queue depths
                             let queue_depth = bus_rx.len();
                             let batch_size = match queue_depth {
                                 0..=10 => 5,
                                 11..=100 => 20,
                                 101..=500 => 50,
-                                _ => 100,
+                                501..=1000 => 200,
+                                _ => 500,
                             };
                             for _ in 0..batch_size {
                                 match bus_rx.try_recv() {
