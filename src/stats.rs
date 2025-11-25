@@ -71,16 +71,14 @@ impl StatsHistory {
         }
 
         // Single-pass computation of sum, min, max
-        let (sum_routes, min_routes, max_routes) = window.fold(
-            (0usize, usize::MAX, 0usize),
-            |(sum, min, max), s| {
+        let (sum_routes, min_routes, max_routes) =
+            window.fold((0usize, usize::MAX, 0usize), |(sum, min, max), s| {
                 (
                     sum + s.total_routes,
                     min.min(s.total_routes),
                     max.max(s.total_routes),
                 )
-            },
-        );
+            });
 
         // Handle edge case where fold ran on empty iterator (shouldn't happen due to earlier check)
         if max_routes == 0 && min_routes == usize::MAX {

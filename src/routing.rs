@@ -1,6 +1,6 @@
 use crate::router::EndpointId;
-use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry; // Added for Entry enum
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -98,8 +98,8 @@ impl RoutingTable {
             if let Some((&oldest_sysid, _)) = oldest_sys_entry {
                 // Manually decrement counts for endpoints in sys_routes
                 if let Some(removed_entry) = self.sys_routes.remove(&oldest_sysid) {
-                     for &ep_id in &removed_entry.endpoints {
-                         if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
+                    for &ep_id in &removed_entry.endpoints {
+                        if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
                             *occ.get_mut() -= 1;
                             if *occ.get() == 0 {
                                 occ.remove();
@@ -111,7 +111,7 @@ impl RoutingTable {
                 self.routes.retain(|(s, _), entry| {
                     if *s == oldest_sysid {
                         for &ep_id in &entry.endpoints {
-                             if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
+                            if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
                                 *occ.get_mut() -= 1;
                                 if *occ.get() == 0 {
                                     occ.remove();
@@ -131,7 +131,8 @@ impl RoutingTable {
         self.routes
             .entry((sysid, compid))
             .and_modify(|e| {
-                if e.endpoints.insert(endpoint_id) { // Check if new endpoint in this entry
+                if e.endpoints.insert(endpoint_id) {
+                    // Check if new endpoint in this entry
                     increment_ep_count_for_routes = true;
                 }
                 e.last_seen = now;
@@ -173,9 +174,13 @@ impl RoutingTable {
     /// An update is needed if the route is unknown or the last update was more than 1 second ago.
     #[allow(dead_code)] // This function is used in src/endpoint_core.rs
     pub fn needs_update(&self, sysid: u8, compid: u8, now: Instant) -> bool {
-        let comp_fresh = self.routes.get(&(sysid, compid))
+        let comp_fresh = self
+            .routes
+            .get(&(sysid, compid))
             .is_some_and(|e| now.duration_since(e.last_seen) < Duration::from_secs(1));
-        let sys_fresh = self.sys_routes.get(&sysid)
+        let sys_fresh = self
+            .sys_routes
+            .get(&sysid)
             .is_some_and(|e| now.duration_since(e.last_seen) < Duration::from_secs(1));
 
         !(comp_fresh && sys_fresh)

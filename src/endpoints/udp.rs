@@ -158,10 +158,12 @@ pub async fn run(
                             warn!("UDP send error to target: {}", e);
                         }
                     } else {
-                        let targets: Vec<SocketAddr> = clients_send.iter().map(|r| *r.key()).collect();
-                        let sends: Vec<_> = targets.iter().map(|client| {
-                            s_socket.send_to(&packet_data, *client)
-                        }).collect();
+                        let targets: Vec<SocketAddr> =
+                            clients_send.iter().map(|r| *r.key()).collect();
+                        let sends: Vec<_> = targets
+                            .iter()
+                            .map(|client| s_socket.send_to(&packet_data, *client))
+                            .collect();
 
                         let results = join_all(sends).await;
                         for (client, res) in targets.into_iter().zip(results) {

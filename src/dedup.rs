@@ -183,9 +183,17 @@ mod tests {
             // Data1 should still be a duplicate as it's within the window if re-inserted earlier.
             // After all buckets have rotated, the original slot for data1 should have been cleared.
             if i < dedup.num_buckets - 1 {
-                assert!(dedup.is_duplicate(data1), "Data1 should be duplicate after {} rotations", i);
+                assert!(
+                    dedup.is_duplicate(data1),
+                    "Data1 should be duplicate after {} rotations",
+                    i
+                );
             } else {
-                assert!(!dedup.is_duplicate(data1), "Data1 should NOT be duplicate after {} rotations", i);
+                assert!(
+                    !dedup.is_duplicate(data1),
+                    "Data1 should NOT be duplicate after {} rotations",
+                    i
+                );
             }
         }
 

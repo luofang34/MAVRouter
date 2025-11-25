@@ -77,7 +77,7 @@ pub async fn run(
                                             // Use timestamp from RoutedMessage
                                             let timestamp_us = msg.timestamp_us;
                                             let ts_bytes = timestamp_us.to_be_bytes();
-                
+
                                             if let Err(e) = writer.write_all(&ts_bytes).await {
                                                 error!("TLog write error: {}", e);
                                                 break;

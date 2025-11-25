@@ -40,7 +40,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(unix)]
 use tokio::net::UnixListener;
 #[cfg(unix)]
-use tokio::signal::unix::{signal, SignalKind, Signal};
+use tokio::signal::unix::{signal, Signal, SignalKind};
 
 #[cfg(unix)]
 async fn run_stats_server(
@@ -342,8 +342,10 @@ async fn main() -> Result<()> {
                     let m = crate::config::EndpointMode::Server;
                     let token = task_token.clone();
                     async move {
-                        crate::endpoints::tcp::run(id, addr, m, bus_tx, bus_rx, rt, dd, filters, token)
-                            .await
+                        crate::endpoints::tcp::run(
+                            id, addr, m, bus_tx, bus_rx, rt, dd, filters, token,
+                        )
+                        .await
                     }
                 },
             )));
@@ -402,8 +404,19 @@ async fn main() -> Result<()> {
                             let m = m.clone();
                             let token = task_token.clone();
                             async move {
-                                crate::endpoints::udp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token, cleanup_ttl)
-                                    .await
+                                crate::endpoints::udp::run(
+                                    i,
+                                    addr,
+                                    m,
+                                    bus_tx,
+                                    bus_rx,
+                                    rt,
+                                    dd,
+                                    f,
+                                    token,
+                                    cleanup_ttl,
+                                )
+                                .await
                             }
                         },
                     )));
@@ -431,8 +444,10 @@ async fn main() -> Result<()> {
                             let m = m.clone();
                             let token = task_token.clone();
                             async move {
-                                crate::endpoints::tcp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token)
-                                    .await
+                                crate::endpoints::tcp::run(
+                                    i, addr, m, bus_tx, bus_rx, rt, dd, f, token,
+                                )
+                                .await
                             }
                         },
                     )));
