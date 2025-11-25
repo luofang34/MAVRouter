@@ -129,12 +129,16 @@ impl EndpointCore {
                 .unwrap_or(Duration::from_secs(0))
                 .as_micros() as u64;
 
+            // Reuse serialized bytes
+            let serialized_bytes = Arc::new(temp_buf);
+
             if let Err(e) = self.bus_tx.send(RoutedMessage {
                 source_id: self.id,
                 header: frame.header,
                 message: Arc::new(frame.message),
                 version: frame.version,
                 timestamp_us,
+                serialized_bytes,
             }) {
                 warn!("Bus send error: {}", e);
             }
@@ -274,28 +278,19 @@ where
                                 continue;
                             }
 
-                    let mut buf = Vec::new();
-                                                if let Err(e) = match msg.version {
-                                                    MavlinkVersion::V2 => mavlink::write_v2_msg(&mut buf, msg.header, &*msg.message),
-                                                    MavlinkVersion::V1 => mavlink::write_v1_msg(&mut buf, msg.header, &*msg.message),
-                                                } {
-                                                    warn!("{} Serialize Error: {}", name, e);
-                                                    continue;
-                                                }
-                    
-                                                tokio::select! {
-                                                    res = writer.write_all(&buf) => {
-                                                        if let Err(e) = res {
-                                                            debug!("{} write error: {}", name, e);
-                                                            break;
-                                                        }
-                                                    }
-                                                    _ = cancel_token_for_writer_loop.cancelled() => {
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            Err(broadcast::error::RecvError::Lagged(n)) => {                            warn!("{} Sender lagged: missed {} messages", name, n);
+                            tokio::select! {
+                                res = writer.write_all(&msg.serialized_bytes) => {
+                                    if let Err(e) = res {
+                                        debug!("{} write error: {}", name, e);
+                                        break;
+                                    }
+                                }
+                                _ = cancel_token_for_writer_loop.cancelled() => {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {                            warn!("{} Sender lagged: missed {} messages", name, n);
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
                     }

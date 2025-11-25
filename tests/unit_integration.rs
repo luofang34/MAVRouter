@@ -58,16 +58,23 @@ async fn test_stream_loopback() {
     assert_eq!(received.header.system_id, 1);
 
     // Test: Send to Bus (Output from Endpoint) -> Read from Client
+    let header = MavHeader {
+        system_id: 2,
+        component_id: 1,
+        ..Default::default()
+    };
+    let message =
+        mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
+    let mut buf_out = Vec::new();
+    mavlink::write_v2_msg(&mut buf_out, header, &message).unwrap();
+
     let msg_out = RoutedMessage {
         source_id: EndpointId(2), // From another endpoint
-        header: MavHeader {
-            system_id: 2,
-            component_id: 1,
-            ..Default::default()
-        },
-        message: Arc::new(mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default())),
+        header,
+        message: Arc::new(message),
         version: MavlinkVersion::V2,
         timestamp_us: 0,
+        serialized_bytes: Arc::new(buf_out),
     };
     bus.send(msg_out).unwrap();
 

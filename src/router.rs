@@ -19,6 +19,8 @@ pub struct RoutedMessage {
     pub version: MavlinkVersion,
     /// Arrival timestamp in microseconds since UNIX EPOCH.
     pub timestamp_us: u64,
+    /// Cached serialized message bytes to avoid re-serialization.
+    pub serialized_bytes: Arc<Vec<u8>>,
 }
 
 /// Type alias for the message bus sender.
@@ -72,6 +74,7 @@ mod tests {
             message: Arc::new(MavMessage::HEARTBEAT(HEARTBEAT_DATA::default())),
             version: MavlinkVersion::V2,
             timestamp_us: 0,
+            serialized_bytes: Arc::new(Vec::new()),
         };
 
         bus.send(msg.clone()).expect("Failed to send test message");

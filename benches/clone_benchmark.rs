@@ -1,8 +1,8 @@
-use criterion::{criterion_group, criterion_main, Criterion, black_box};
-use mavrouter_rs::router::{RoutedMessage, EndpointId};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use mavlink::common::MavMessage;
 use mavlink::MavHeader;
 use mavlink::MavlinkVersion;
+use mavrouter_rs::router::{EndpointId, RoutedMessage};
 use std::sync::Arc;
 
 fn bench_routed_message_clone(c: &mut Criterion) {
@@ -14,6 +14,7 @@ fn bench_routed_message_clone(c: &mut Criterion) {
         message: Arc::new(message),
         version: MavlinkVersion::V2,
         timestamp_us: 0,
+        serialized_bytes: Arc::new(Vec::new()),
     };
 
     c.bench_function("routed_message_clone", |b| {
