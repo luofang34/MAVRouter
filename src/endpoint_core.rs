@@ -117,7 +117,7 @@ impl EndpointCore {
     /// # Arguments
     ///
     /// * `frame` - The parsed `MavlinkFrame` containing header, message, and version.
-    pub fn handle_incoming_frame(&self, frame: MavlinkFrame) {
+    pub async fn handle_incoming_frame(&self, frame: MavlinkFrame) {
         // Cache message_id once (avoids repeated calls through Arc later)
         let message_id = frame.message.message_id();
 
@@ -176,15 +176,19 @@ impl EndpointCore {
         let target = extract_target(&frame.message);
 
         // Send lightweight RoutedMessage (no Arc allocation - message_id cached)
-        if let Err(e) = self.bus_tx.try_broadcast(RoutedMessage {
-            source_id: self.id,
-            header: frame.header,
-            message_id,
-            version: frame.version,
-            timestamp_us,
-            serialized_bytes,
-            target,
-        }) {
+        if let Err(e) = self
+            .bus_tx
+            .broadcast(RoutedMessage {
+                source_id: self.id,
+                header: frame.header,
+                message_id,
+                version: frame.version,
+                timestamp_us,
+                serialized_bytes,
+                target,
+            })
+            .await
+        {
             warn!("Bus send error: {:?}", e);
         }
     }
@@ -304,7 +308,7 @@ where
                         Ok(n) => {
                             parser.push(&buf[..n]);
                             while let Some(frame) = parser.parse_next() {
-                                core_read.handle_incoming_frame(frame);
+                                core_read.handle_incoming_frame(frame).await;
                             }
                         }
                         Err(e) => {

@@ -84,9 +84,7 @@ impl MessageBus {
 /// // Endpoints can now subscribe to this bus
 /// ```
 pub fn create_bus(capacity: usize) -> MessageBus {
-    let (mut tx, rx) = async_broadcast::broadcast(capacity);
-    // Match tokio broadcast semantics: drop oldest messages when lagging
-    tx.set_overflow(true);
+    let (tx, rx) = async_broadcast::broadcast(capacity);
     MessageBus { tx, rx }
 }
 
