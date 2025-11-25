@@ -6,12 +6,12 @@
 //! responsible for processing MAVLink messages over asynchronous read/write streams.
 
 use crate::dedup::Dedup;
+use crate::error::Result;
 use crate::filter::EndpointFilters;
 use crate::framing::{MavlinkFrame, StreamParser};
 use crate::mavlink_utils::extract_target;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use anyhow::Result;
 use bytes::Bytes;
 use mavlink::{MavlinkVersion, Message};
 use parking_lot::{Mutex, RwLock};

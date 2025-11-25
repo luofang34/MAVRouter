@@ -1,5 +1,5 @@
+use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
-use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 use tokio::fs;
@@ -169,13 +169,16 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns an `anyhow::Error` if the file cannot be read or parsed,
+    /// Returns a `RouterError` if the file cannot be read or parsed,
     /// or if the configuration fails validation.
     pub async fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path_str = path.as_ref().display().to_string();
         let content = fs::read_to_string(path.as_ref())
             .await
-            .context("Failed to read config file")?;
-        let config: Config = toml::from_str(&content).context("Failed to parse config file")?;
+            .map_err(|e| RouterError::filesystem(&path_str, e))?;
+
+        let config: Config = toml::from_str(&content)
+            .map_err(|e| RouterError::config(format!("Failed to parse config file: {}", e)))?;
 
         config.validate()?;
 
@@ -187,7 +190,7 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns an `anyhow::Error` if the configuration contains invalid or
+    /// Returns a `RouterError::Config` if the configuration contains invalid or
     /// conflicting settings.
     #[allow(unused_variables)] // 'device' is unused on non-Unix platforms
     pub fn validate(&self) -> Result<()> {
@@ -200,22 +203,28 @@ impl Config {
         for (i, endpoint) in self.endpoint.iter().enumerate() {
             match endpoint {
                 EndpointConfig::Tcp { address, .. } | EndpointConfig::Udp { address, .. } => {
-                    let addr = address.parse::<std::net::SocketAddr>().with_context(|| {
-                        format!("Invalid address in endpoint {}: {}", i, address)
+                    let addr = address.parse::<std::net::SocketAddr>().map_err(|e| {
+                        RouterError::config(format!(
+                            "Invalid address in endpoint {}: {} ({})",
+                            i, address, e
+                        ))
                     })?;
 
                     if !ports.insert(addr.port()) {
-                        anyhow::bail!("Duplicate port {} in endpoint {}", addr.port(), i);
+                        return Err(RouterError::config(format!(
+                            "Duplicate port {} in endpoint {}",
+                            addr.port(),
+                            i
+                        )));
                     }
                 }
                 EndpointConfig::Serial { device, baud, .. } => {
                     // Verify baud rate
                     if *baud < 300 || *baud > 4_000_000 {
-                        anyhow::bail!(
+                        return Err(RouterError::config(format!(
                             "Invalid baud rate in endpoint {}: {} (must be 300-4000000)",
-                            i,
-                            baud
-                        );
+                            i, baud
+                        )));
                     }
 
                     #[cfg(unix)]
@@ -237,12 +246,10 @@ impl Config {
                 |ids: &std::collections::HashSet<u32>, type_str: &str| -> Result<()> {
                     for &msg_id in ids {
                         if msg_id > 65535 {
-                            anyhow::bail!(
+                            return Err(RouterError::config(format!(
                                 "Invalid {} msg_id in endpoint {}: {} (must be <= 65535)",
-                                type_str,
-                                i,
-                                msg_id
-                            );
+                                type_str, i, msg_id
+                            )));
                         }
                     }
                     Ok(())
@@ -255,7 +262,10 @@ impl Config {
         }
 
         if self.general.bus_capacity < 10 {
-            anyhow::bail!("bus_capacity too small: {}", self.general.bus_capacity);
+            return Err(RouterError::config(format!(
+                "bus_capacity too small: {}",
+                self.general.bus_capacity
+            )));
         }
 
         Ok(())

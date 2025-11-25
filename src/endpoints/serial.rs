@@ -7,10 +7,10 @@
 
 use crate::dedup::Dedup;
 use crate::endpoint_core::{run_stream_loop, EndpointCore};
+use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use anyhow::{Context, Result};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use std::time::Duration;
@@ -138,7 +138,7 @@ async fn open_and_run(
 ) -> Result<()> {
     let mut port = tokio_serial::new(device, baud)
         .open_native_async()
-        .with_context(|| format!("Failed to open serial port {}", device))?;
+        .map_err(|e| RouterError::serial(device, e))?;
 
     #[cfg(unix)]
     if let Err(e) = port.set_exclusive(false) {

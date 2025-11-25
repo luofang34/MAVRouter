@@ -5,8 +5,8 @@
 //! TLOG (Telemetry Log) file. Each TLOG file is timestamped, and
 //! messages are prepended with their arrival timestamp.
 
+use crate::error::{Result, RouterError};
 use crate::router::RoutedMessage;
-use anyhow::{Context, Result};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, File};
@@ -47,7 +47,7 @@ pub async fn run(
     if !dir.exists() {
         fs::create_dir_all(dir)
             .await
-            .context("Failed to create logs directory")?;
+            .map_err(|e| RouterError::filesystem(&logs_dir, e))?;
     }
 
     let now = SystemTime::now();
@@ -62,7 +62,7 @@ pub async fn run(
 
     let file = File::create(&path)
         .await
-        .context("Failed to create log file")?;
+        .map_err(|e| RouterError::filesystem(path.display().to_string(), e))?;
     let mut writer = tokio::io::BufWriter::new(file);
 
     loop {

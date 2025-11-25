@@ -3,6 +3,7 @@
 
 mod config;
 mod endpoint_core;
+mod error;
 mod router;
 mod endpoints {
     pub mod serial;
@@ -20,10 +21,10 @@ mod stats;
 use crate::config::{Config, EndpointConfig};
 use crate::dedup::Dedup;
 use crate::endpoint_core::ExponentialBackoff;
+use crate::error::Result;
 use crate::router::create_bus;
 use crate::routing::RoutingTable;
 use crate::stats::StatsHistory;
-use anyhow::Result;
 use clap::Parser;
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
@@ -47,7 +48,7 @@ async fn run_stats_server(
     socket_path: String,
     routing_table: Arc<RwLock<RoutingTable>>,
     token: CancellationToken,
-) -> Result<()> {
+) -> crate::error::Result<()> {
     let path = Path::new(&socket_path);
     if path.exists() {
         tokio::fs::remove_file(path).await?;

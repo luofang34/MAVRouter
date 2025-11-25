@@ -10,11 +10,11 @@
 
 use crate::dedup::Dedup;
 use crate::endpoint_core::EndpointCore;
+use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::framing::MavlinkFrame;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use anyhow::{Context, Result};
 use dashmap::DashMap;
 use futures::future::join_all; // Added join_all
 use mavlink::MavlinkVersion;
@@ -83,16 +83,18 @@ pub async fn run(
     let (bind_addr, target_addr) = if mode == crate::config::EndpointMode::Server {
         (address.clone(), None)
     } else {
-        let mut addrs = address
-            .to_socket_addrs()
-            .context("Invalid remote address")?;
-        let target = addrs.next().context("Could not resolve remote address")?;
+        let mut addrs = address.to_socket_addrs().map_err(|e| {
+            RouterError::config(format!("Invalid remote address '{}': {}", address, e))
+        })?;
+        let target = addrs.next().ok_or_else(|| {
+            RouterError::config(format!("Could not resolve remote address '{}'", address))
+        })?;
         ("0.0.0.0:0".to_string(), Some(target))
     };
 
     let socket = UdpSocket::bind(&bind_addr)
         .await
-        .with_context(|| format!("Failed to bind UDP socket to {}", bind_addr))?;
+        .map_err(|e| RouterError::network(&bind_addr, e))?;
 
     let r = Arc::new(socket);
     let s = r.clone();

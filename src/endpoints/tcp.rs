@@ -10,10 +10,10 @@
 
 use crate::dedup::Dedup;
 use crate::endpoint_core::{run_stream_loop, EndpointCore, ExponentialBackoff};
+use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use anyhow::{Context, Result};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,7 +76,7 @@ pub async fn run(
         crate::config::EndpointMode::Server => {
             let listener = TcpListener::bind(&address)
                 .await
-                .with_context(|| format!("Failed to bind TCP listener to {}", address))?;
+                .map_err(|e| RouterError::network(&address, e))?;
             info!("TCP Server listening on {}", address);
 
             let mut join_set = JoinSet::new();
