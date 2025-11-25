@@ -15,6 +15,7 @@ use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use anyhow::{Context, Result};
 use parking_lot::{Mutex, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
@@ -80,14 +81,22 @@ pub async fn run(
             info!("TCP Server listening on {}", address);
 
             let mut join_set = JoinSet::new();
+            // Counter for assigning unique IDs to each TCP client connection
+            let client_id_counter = Arc::new(AtomicUsize::new(id * 10000));
 
             loop {
                 tokio::select! {
                     accept_res = listener.accept() => {
                         match accept_res {
                             Ok((stream, addr)) => {
-                                info!("Accepted TCP connection from {}", addr);
-                                let core_client = core.clone();
+                                // Assign unique ID to this client connection
+                                let client_id = client_id_counter.fetch_add(1, Ordering::Relaxed);
+                                info!("Accepted TCP connection from {} (Endpoint ID: {})", addr, client_id);
+
+                                // Create new core with unique endpoint ID
+                                let mut core_client = core.clone();
+                                core_client.id = EndpointId(client_id);
+
                                 let rx_client = bus_rx.resubscribe();
                                 let token_client = token.clone();
 

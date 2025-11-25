@@ -6,6 +6,22 @@ from pymavlink import mavutil
 # Shared state
 client_results = [False, False]
 
+def heartbeat_sender():
+    """Simulates autopilot sending heartbeats via TCP"""
+    try:
+        time.sleep(0.5)  # Let main setup finish
+        master = mavutil.mavlink_connection('tcp:127.0.0.1:5760', source_system=1)
+        for _ in range(30):  # Send for 15 seconds
+            master.mav.heartbeat_send(
+                mavutil.mavlink.MAV_TYPE_QUADROTOR,
+                mavutil.mavlink.MAV_AUTOPILOT_PX4,
+                0, 0, 0
+            )
+            time.sleep(0.5)
+        master.close()
+    except Exception as e:
+        print(f"Heartbeat sender error: {e}")
+
 def client_task(index):
     try:
         # Create a unique connection
@@ -28,13 +44,17 @@ def client_task(index):
 
 def main():
     print("Starting Multi-Client Test (2 Simultaneous TCP Clients)...")
-    
+
+    # Start heartbeat sender in background
+    sender = threading.Thread(target=heartbeat_sender, daemon=True)
+    sender.start()
+
     t1 = threading.Thread(target=client_task, args=(0,))
     t2 = threading.Thread(target=client_task, args=(1,))
-    
+
     t1.start()
     t2.start()
-    
+
     t1.join()
     t2.join()
     
