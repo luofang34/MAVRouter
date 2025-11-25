@@ -1,10 +1,17 @@
 use mavlink::{common::MavMessage, MavHeader, MavlinkVersion};
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 /// Unique identifier for a routing endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EndpointId(pub usize);
+
+impl fmt::Display for EndpointId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Endpoint({})", self.0)
+    }
+}
 
 /// A routed MAVLink message with source information.
 #[derive(Clone, Debug)]
