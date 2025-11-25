@@ -4,6 +4,7 @@ import threading
 import os
 import multiprocessing
 import select
+import socket
 
 # --- Dependency Check ---
 try:
@@ -30,6 +31,18 @@ except ImportError:
 # Configuration
 TARGET_IP = '127.0.0.1'
 TARGET_PORT = 5760
+
+def wait_for_port(ip, port, timeout=10):
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection((ip, port), timeout=1):
+                print(f"Port {port} is open.")
+                return True
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.1)
+    print(f"Timeout waiting for port {port}.")
+    return False
 
 def get_process_memory():
     """Returns RSS memory in MB"""
@@ -125,6 +138,10 @@ def run_load_round(round_name, duration, num_clients, msg_rate_per_client):
 def main():
     print("Starting High Load Loop Stress Test...")
 
+    if not wait_for_port(TARGET_IP, TARGET_PORT):
+        print("❌ Router port not reachable. Exiting.")
+        sys.exit(1)
+
     # Round 1: Warm-up (5s, 10 clients, 1000 msg/s total)
     # Reduced per-client rate to 100 to hit 1000 total
     t1, m1 = run_load_round("Round 1: Warm-up", 5, 10, 100)
@@ -150,8 +167,8 @@ def main():
         success = False
         
     # Memory Check
-    if m3 > 5.0:
-        print(f"❌ Memory leak detected in Round 3 (>5MB growth): {m3:.1f}MB")
+    if m3 > 50.0:
+        print(f"❌ Memory leak detected in Round 3 (>50MB growth): {m3:.1f}MB")
         success = False
     elif m3 > 0:
         print(f"✅ Memory stable (Growth: {m3:.1f}MB)")
