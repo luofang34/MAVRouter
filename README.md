@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/luofang34/mavrouter-rs/workflows/CI/badge.svg)](https://github.com/luofang34/mavrouter-rs/actions)
 [![codecov](https://codecov.io/gh/luofang34/mavrouter-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/luofang34/mavrouter-rs)
-[![crates.io](https://img.shields.io/crates/v/mavrouter-rs.svg)](https://crates.io/crates/mavrouter-rs)
-[![docs.rs](https://docs.rs/mavrouter-rs/badge.svg)](https://docs.rs/mavrouter-rs)
-[![License](https://img.shields.io/crates/l/mavrouter-rs.svg)](LICENSE)
+[![crates.io](https://img.shields.io/crates/v/mavrouter.svg)](https://crates.io/crates/mavrouter)
+[![docs.rs](https://docs.rs/mavrouter/badge.svg)](https://docs.rs/mavrouter)
+[![License](https://img.shields.io/crates/l/mavrouter.svg)](LICENSE)
 
 A MAVLink router for embedded systems.
 
@@ -12,7 +12,7 @@ A MAVLink router for embedded systems.
 
 Install from crates.io:
 ```bash
-cargo install mavrouter-rs
+cargo install mavrouter
 ```
 
 Basic usage:
