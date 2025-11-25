@@ -15,7 +15,7 @@ use crate::routing::RoutingTable;
 use mavlink::Message;
 use parking_lot::RwLock;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -91,15 +91,23 @@ pub struct EndpointCore {
     pub update_routing: bool,
 }
 
-/// Get current timestamp in microseconds using coarse clock (faster than precise clock).
-/// Uses CLOCK_MONOTONIC_COARSE on Linux for ~10x faster syscall.
+/// Get current wall-clock timestamp in microseconds with low overhead.
+///
+/// Avoids a syscall on every call by capturing the UNIX_EPOCH reference once
+/// and adding a monotonic elapsed duration to it.
 #[inline(always)]
 fn timestamp_us_fast() -> u64 {
-    // Use Instant which is optimized per-platform (vDSO on Linux)
-    // For throughput, we just need a monotonic counter, not wall-clock time
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let start = START.get_or_init(Instant::now);
-    start.elapsed().as_micros() as u64
+    static BASE: std::sync::OnceLock<(Instant, Duration)> = std::sync::OnceLock::new();
+    let (start_instant, start_unix) = BASE.get_or_init(|| {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        (Instant::now(), now)
+    });
+
+    // Saturate to u64 on extremely long uptimes
+    let total = start_unix.saturating_add(start_instant.elapsed());
+    total.as_micros().min(u64::MAX as u128) as u64
 }
 
 impl EndpointCore {
@@ -381,6 +389,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
 
     #[test]
     fn test_exponential_backoff_initial() {
@@ -431,5 +440,21 @@ mod tests {
         assert_eq!(backoff.next_backoff(), Duration::from_secs(3));
         assert_eq!(backoff.next_backoff(), Duration::from_secs(9));
         assert_eq!(backoff.next_backoff(), Duration::from_secs(27));
+    }
+
+    #[test]
+    fn test_timestamp_us_fast_monotonic_walltime() {
+        let t1 = timestamp_us_fast();
+        let t2 = timestamp_us_fast();
+        assert!(t2 >= t1);
+
+        // Should be near wall-clock now (within a generous window to avoid flakiness)
+        let now = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        let tolerance = 5_000_000; // 5 seconds
+        assert!(t2 + tolerance >= now);
+        assert!(t2 <= now + tolerance);
     }
 }
