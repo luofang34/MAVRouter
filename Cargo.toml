@@ -1,5 +1,5 @@
 [package]
-name = "mavrouter-rs"
+name = "mavrouter"
 version = "0.1.1"
 edition = "2021"
 authors = ["Fang Luo <luofang@luofang.org>"]
@@ -7,18 +7,18 @@ description = "MAVLink router"
 license = "AGPL-3.0"
 repository = "https://github.com/luofang34/mavrouter-rs"
 homepage = "https://github.com/luofang34/mavrouter-rs"
-documentation = "https://docs.rs/mavrouter-rs"
+documentation = "https://docs.rs/mavrouter"
 readme = "README.md"
 keywords = ["mavlink", "router", "telemetry", "uav", "embedded"]
 categories = ["network-programming", "embedded", "aerospace"]
 rust-version = "1.70"
 
 [lib]
-name = "mavrouter_rs"
+name = "mavrouter"
 path = "src/lib.rs"
 
 [[bin]]
-name = "mavrouter-rs"
+name = "mavrouter"
 path = "src/main.rs"
 
 [dependencies]
