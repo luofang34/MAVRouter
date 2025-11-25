@@ -198,4 +198,105 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn test_v1_packet_parsing() {
+        let mut parser = StreamParser::new();
+        let header = MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        };
+        let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
+
+        let mut buf = Vec::new();
+        mavlink::write_v1_msg(&mut buf, header, &msg).expect("Failed to write V1 message");
+
+        parser.push(&buf);
+        let res = parser.parse_next();
+        assert!(res.is_some());
+        let frame = res.expect("Should parse V1 packet");
+        assert_eq!(frame.version, MavlinkVersion::V1);
+        assert_eq!(frame.header.system_id, 1);
+    }
+
+    #[test]
+    fn test_v2_packet_parsing() {
+        let mut parser = StreamParser::new();
+        let header = MavHeader {
+            system_id: 255,
+            component_id: 190,
+            sequence: 42,
+        };
+        let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
+
+        let mut buf = Vec::new();
+        mavlink::write_v2_msg(&mut buf, header, &msg).expect("Failed to write V2 message");
+
+        parser.push(&buf);
+        let res = parser.parse_next();
+        assert!(res.is_some());
+        let frame = res.expect("Should parse V2 packet");
+        assert_eq!(frame.version, MavlinkVersion::V2);
+        assert_eq!(frame.header.system_id, 255);
+        assert_eq!(frame.header.component_id, 190);
+    }
+
+    #[test]
+    fn test_garbage_before_packet() {
+        let mut parser = StreamParser::new();
+        let header = MavHeader::default();
+        let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
+
+        let mut buf = Vec::new();
+        mavlink::write_v2_msg(&mut buf, header, &msg).expect("Failed to write message");
+
+        // Prepend garbage bytes
+        let mut garbage = vec![0x00, 0x11, 0x22, 0x33, 0x44];
+        garbage.extend_from_slice(&buf);
+
+        parser.push(&garbage);
+        let res = parser.parse_next();
+        assert!(res.is_some(), "Should skip garbage and find packet");
+    }
+
+    #[test]
+    fn test_empty_buffer_returns_none() {
+        let mut parser = StreamParser::new();
+        assert!(parser.parse_next().is_none());
+    }
+
+    #[test]
+    fn test_no_stx_clears_buffer() {
+        let mut parser = StreamParser::new();
+        // Push data with no valid STX (0xFD or 0xFE)
+        parser.push(&[0x00, 0x11, 0x22, 0x33]);
+        assert!(parser.parse_next().is_none());
+        // Buffer should be cleared since no STX found
+    }
+
+    #[test]
+    fn test_multiple_packets_in_sequence() {
+        let mut parser = StreamParser::new();
+        let header = MavHeader::default();
+        let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
+
+        let mut buf = Vec::new();
+        mavlink::write_v2_msg(&mut buf, header, &msg).expect("write msg 1");
+        mavlink::write_v2_msg(&mut buf, header, &msg).expect("write msg 2");
+        mavlink::write_v2_msg(&mut buf, header, &msg).expect("write msg 3");
+
+        parser.push(&buf);
+
+        assert!(parser.parse_next().is_some());
+        assert!(parser.parse_next().is_some());
+        assert!(parser.parse_next().is_some());
+        assert!(parser.parse_next().is_none());
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let parser = StreamParser::default();
+        assert!(parser.buffer.is_empty());
+    }
 }

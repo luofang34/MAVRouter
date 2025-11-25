@@ -45,7 +45,7 @@ pub struct Config {
 }
 
 /// General router configuration.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize)]
 pub struct GeneralConfig {
     /// Optional TCP server port for general GCS connections.
     pub tcp_port: Option<u16>,
@@ -87,6 +87,24 @@ pub struct GeneralConfig {
 
 fn default_bus_capacity() -> usize {
     1000
+}
+
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self {
+            tcp_port: None,
+            dedup_period_ms: None,
+            log: None,
+            log_telemetry: false,
+            bus_capacity: default_bus_capacity(),
+            routing_table_ttl_secs: default_routing_table_ttl_secs(),
+            routing_table_prune_interval_secs: default_routing_table_prune_interval_secs(),
+            stats_retention_secs: default_stats_retention_secs(),
+            stats_sample_interval_secs: default_stats_sample_interval_secs(),
+            stats_log_interval_secs: default_stats_log_interval_secs(),
+            stats_socket_path: None,
+        }
+    }
 }
 fn default_routing_table_ttl_secs() -> u64 {
     300
@@ -291,5 +309,90 @@ mod tests {
         };
 
         assert!(config.validate().is_err(), "Should detect duplicate port");
+    }
+
+    #[test]
+    fn test_invalid_baud_rate() {
+        let config = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: 100, // Too low
+                filters: EndpointFilters::default(),
+            }],
+        };
+        assert!(config.validate().is_err());
+
+        let config_high = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: 5_000_000, // Too high
+                filters: EndpointFilters::default(),
+            }],
+        };
+        assert!(config_high.validate().is_err());
+    }
+
+    #[test]
+    fn test_valid_baud_rate() {
+        let config = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: 115200,
+                filters: EndpointFilters::default(),
+            }],
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_address() {
+        let config = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Tcp {
+                address: "not_an_address".to_string(),
+                mode: EndpointMode::Client,
+                filters: EndpointFilters::default(),
+            }],
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_bus_capacity_too_small() {
+        let config = Config {
+            general: GeneralConfig {
+                bus_capacity: 5, // Too small
+                ..Default::default()
+            },
+            endpoint: vec![],
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_valid_config() {
+        let config = Config {
+            general: GeneralConfig {
+                tcp_port: Some(5760),
+                bus_capacity: 1000,
+                ..Default::default()
+            },
+            endpoint: vec![
+                EndpointConfig::Udp {
+                    address: "0.0.0.0:14550".to_string(),
+                    mode: EndpointMode::Server,
+                    filters: EndpointFilters::default(),
+                },
+                EndpointConfig::Tcp {
+                    address: "127.0.0.1:5761".to_string(),
+                    mode: EndpointMode::Client,
+                    filters: EndpointFilters::default(),
+                },
+            ],
+        };
+        assert!(config.validate().is_ok());
     }
 }

@@ -206,4 +206,52 @@ mod tests {
         assert_eq!(target.system_id, 100);
         assert_eq!(target.component_id, 1);
     }
+
+    #[test]
+    fn test_mission_request_list_target() {
+        let mission = MISSION_REQUEST_LIST_DATA {
+            target_system: 1,
+            target_component: 190,
+        };
+        let target = extract_target(&MavMessage::MISSION_REQUEST_LIST(mission));
+        assert_eq!(target.system_id, 1);
+        assert_eq!(target.component_id, 190);
+        assert!(!target.is_broadcast());
+        assert!(!target.is_system_wide());
+    }
+
+    #[test]
+    fn test_set_mode_system_wide() {
+        let mode = SET_MODE_DATA {
+            target_system: 1,
+            base_mode: mavlink::common::MavMode::MAV_MODE_MANUAL_ARMED,
+            custom_mode: 0,
+        };
+        let target = extract_target(&MavMessage::SET_MODE(mode));
+        assert_eq!(target.system_id, 1);
+        assert_eq!(target.component_id, 0);
+        assert!(!target.is_broadcast());
+        assert!(target.is_system_wide());
+    }
+
+    #[test]
+    fn test_ping_target() {
+        let ping = PING_DATA {
+            time_usec: 0,
+            seq: 0,
+            target_system: 5,
+            target_component: 10,
+        };
+        let target = extract_target(&MavMessage::PING(ping));
+        assert_eq!(target.system_id, 5);
+        assert_eq!(target.component_id, 10);
+    }
+
+    #[test]
+    fn test_command_ack_broadcast() {
+        // COMMAND_ACK is a broadcast message (returns 0,0)
+        let ack = COMMAND_ACK_DATA::default();
+        let target = extract_target(&MavMessage::COMMAND_ACK(ack));
+        assert!(target.is_broadcast());
+    }
 }

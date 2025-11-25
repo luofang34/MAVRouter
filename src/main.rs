@@ -157,6 +157,11 @@ async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt::init();
 
+    // AGPL-3.0 License Notice
+    info!("mavrouter-rs v{} - AGPL-3.0", env!("CARGO_PKG_VERSION"));
+    info!("Source code: {}", env!("CARGO_PKG_REPOSITORY"));
+    info!("This program comes with ABSOLUTELY NO WARRANTY.");
+
     let args = Args::parse();
 
     info!("Starting mavrouter-rs with config: {}", args.config);

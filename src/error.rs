@@ -112,3 +112,46 @@ impl From<tokio_serial::Error> for RouterError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_error_creation() {
+        let err = RouterError::config("invalid setting");
+        assert!(matches!(err, RouterError::Config(_)));
+        assert!(err.to_string().contains("invalid setting"));
+    }
+
+    #[test]
+    fn test_network_error_creation() {
+        let io_err = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
+        let err = RouterError::network("127.0.0.1:5760", io_err);
+        assert!(matches!(err, RouterError::Network { .. }));
+        assert!(err.to_string().contains("127.0.0.1:5760"));
+    }
+
+    #[test]
+    fn test_filesystem_error_creation() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "not found");
+        let err = RouterError::filesystem("/var/log/test.log", io_err);
+        assert!(matches!(err, RouterError::Filesystem { .. }));
+        assert!(err.to_string().contains("/var/log/test.log"));
+    }
+
+    #[test]
+    fn test_io_error_conversion() {
+        let io_err = io::Error::new(io::ErrorKind::BrokenPipe, "broken");
+        let router_err: RouterError = io_err.into();
+        assert!(matches!(router_err, RouterError::Network { .. }));
+    }
+
+    #[test]
+    fn test_anyhow_error_conversion() {
+        let anyhow_err = anyhow::anyhow!("something went wrong");
+        let router_err: RouterError = anyhow_err.into();
+        assert!(matches!(router_err, RouterError::Internal(_)));
+        assert!(router_err.to_string().contains("something went wrong"));
+    }
+}
