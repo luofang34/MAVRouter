@@ -153,20 +153,7 @@ pub async fn run(
                         continue;
                     }
 
-                    let mut buf = Vec::new();
-                    if let Err(e) = match msg.version {
-                        MavlinkVersion::V2 => {
-                            mavlink::write_v2_msg(&mut buf, msg.header, &*msg.message)
-                        }
-                        MavlinkVersion::V1 => {
-                            mavlink::write_v1_msg(&mut buf, msg.header, &*msg.message)
-                        }
-                    } {
-                        warn!("UDP Serialize Error: {}", e);
-                        continue;
-                    }
-
-                    let packet_data = buf;
+                    let packet_data = msg.serialized_bytes.clone();
 
                     if let Some(target) = target_addr {
                         if let Err(e) = s_socket.send_to(&packet_data, target).await {

@@ -16,7 +16,7 @@ use mavlink::{MavlinkVersion, Message};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
@@ -238,7 +238,7 @@ impl EndpointCore {
 /// or write stream.
 pub async fn run_stream_loop<R, W>(
     mut reader: R,
-    mut writer: W,
+    writer: W,
     mut bus_rx: broadcast::Receiver<RoutedMessage>,
     core: EndpointCore,
     cancel_token: CancellationToken,
@@ -283,6 +283,8 @@ where
     };
 
     let writer_loop = async move {
+        let mut writer = BufWriter::new(writer);
+
         loop {
             tokio::select! {
                 _ = cancel_token_for_writer_loop.cancelled() => break,
@@ -293,19 +295,37 @@ where
                                 continue;
                             }
 
-                            tokio::select! {
-                                res = writer.write_all(&msg.serialized_bytes) => {
-                                    if let Err(e) = res {
-                                        debug!("{} write error: {}", name, e);
-                                        break;
+                            if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
+                                debug!("{} write error: {}", name, e);
+                                break;
+                            }
+
+                            // Optimistic batching
+                            for _ in 0..10 {
+                                match bus_rx.try_recv() {
+                                    Ok(m) => {
+                                        if core.check_outgoing(&m) {
+                                            if let Err(e) = writer.write_all(&m.serialized_bytes).await {
+                                                debug!("{} write error: {}", name, e);
+                                                return;
+                                            }
+                                        }
                                     }
-                                }
-                                _ = cancel_token_for_writer_loop.cancelled() => {
-                                    break;
+                                    Err(broadcast::error::TryRecvError::Empty) => break,
+                                    Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                                        warn!("{} Sender lagged: missed {} messages", name, n);
+                                    }
+                                    Err(broadcast::error::TryRecvError::Closed) => return,
                                 }
                             }
+
+                            if let Err(e) = writer.flush().await {
+                                debug!("{} flush error: {}", name, e);
+                                break;
+                            }
                         }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {                            warn!("{} Sender lagged: missed {} messages", name, n);
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("{} Sender lagged: missed {} messages", name, n);
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
                     }

@@ -39,6 +39,8 @@ use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(unix)]
 use tokio::net::UnixListener;
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind, Signal};
 
 #[cfg(unix)]
 async fn run_stats_server(
@@ -109,6 +111,38 @@ async fn run_stats_server(
     Ok(())
 }
 
+/// Helper struct to handle SIGHUP on Unix and do nothing on Windows
+struct ReloadSignal {
+    #[cfg(unix)]
+    inner: Signal,
+}
+
+impl ReloadSignal {
+    fn new() -> Result<Self> {
+        #[cfg(unix)]
+        {
+            Ok(Self {
+                inner: signal(SignalKind::hangup())?,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {})
+        }
+    }
+
+    async fn recv(&mut self) -> Option<()> {
+        #[cfg(unix)]
+        {
+            self.inner.recv().await
+        }
+        #[cfg(not(unix))]
+        {
+            std::future::pending().await
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -126,313 +160,344 @@ async fn main() -> Result<()> {
 
     info!("Starting mavrouter-rs with config: {}", args.config);
 
-    let config = match Config::load(&args.config).await {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Error loading config: {:#}", e);
-            return Err(e);
-        }
-    };
+    // Initialize reload signal handler
+    let mut sig_hup = ReloadSignal::new()?;
 
-    info!(
-        "Loaded configuration with {} endpoints",
-        config.endpoint.len()
-    );
-
-    let bus = create_bus(config.general.bus_capacity);
-    let mut handles = vec![];
-
-    let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-
-    let dedup_period = config.general.dedup_period_ms.unwrap_or(0);
-    let dedup = Arc::new(Mutex::new(Dedup::new(Duration::from_millis(dedup_period))));
-
-    let cancel_token = CancellationToken::new();
-
-    // Pruning Task
-    let rt_prune = routing_table.clone();
-    let prune_token = cancel_token.child_token();
-    let prune_interval = config.general.routing_table_prune_interval_secs;
-    let prune_ttl = config.general.routing_table_ttl_secs;
-    handles.push(tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = prune_token.cancelled() => {
-                    info!("RoutingTable Pruner shutting down.");
-                    break;
-                }
-                _ = tokio::time::sleep(Duration::from_secs(prune_interval)) => {
-                    let mut rt = rt_prune.write();
-                    rt.prune(Duration::from_secs(prune_ttl));
-                }
+    loop {
+        let config = match Config::load(&args.config).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Error loading config: {:#}", e);
+                return Err(e);
             }
-        }
-    }));
+        };
 
-    // Stats Reporting Task
-    let rt_stats = routing_table.clone();
-    let stats_token = cancel_token.child_token();
+        info!(
+            "Loaded configuration with {} endpoints",
+            config.endpoint.len()
+        );
 
-    let sample_interval = config.general.stats_sample_interval_secs;
-    let retention = config.general.stats_retention_secs;
-    let log_interval = config.general.stats_log_interval_secs;
+        let bus = create_bus(config.general.bus_capacity);
+        let mut handles = vec![];
 
-    if sample_interval > 0 && retention > 0 {
+        let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
+
+        let dedup_period = config.general.dedup_period_ms.unwrap_or(0);
+        let dedup = Arc::new(Mutex::new(Dedup::new(Duration::from_millis(dedup_period))));
+
+        let cancel_token = CancellationToken::new();
+
+        // Pruning Task
+        let rt_prune = routing_table.clone();
+        let prune_token = cancel_token.child_token();
+        let prune_interval = config.general.routing_table_prune_interval_secs;
+        let prune_ttl = config.general.routing_table_ttl_secs;
         handles.push(tokio::spawn(async move {
-            let mut history = StatsHistory::new(retention);
-            let mut last_log_time = 0u64;
-
             loop {
                 tokio::select! {
-                    _ = stats_token.cancelled() => {
-                        info!("Stats Reporter shutting down.");
+                    _ = prune_token.cancelled() => {
+                        info!("RoutingTable Pruner shutting down.");
                         break;
                     }
-                                    _ = tokio::time::sleep(Duration::from_secs(sample_interval)) => {
-                                        let rt = rt_stats.read();
-                                        let mut stats = rt.stats();
-                                        drop(rt); // Release lock quickly
-                        // Ensure timestamp reflects sample time, even if already set in routing.rs
-                        stats.timestamp = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs();
-
-                        let current_timestamp = stats.timestamp; // Capture timestamp before move
-                        history.push(stats.clone());
-
-                        // Periodic logging
-                        if current_timestamp.saturating_sub(last_log_time) >= log_interval {
-                            // 1 minute aggregation
-                            if let Some(min1) = history.aggregate(60) {
-                                info!(
-                                    "Stats [1min] avg={:.1} routes, range=[{}-{}]",
-                                    min1.avg_routes, min1.min_routes, min1.max_routes
-                                );
-                            }
-
-                            // 1 hour aggregation
-                            if let Some(hour1) = history.aggregate(3600) {
-                                info!(
-                                    "Stats [1hr] avg={:.1} routes, max={}",
-                                    hour1.avg_routes, hour1.max_routes
-                                );
-                            }
-
-                            // Full retention aggregation
-                            if let Some(all) = history.aggregate(retention) {
-                                info!(
-                                    "Stats [{}h] avg={:.1} routes, samples={}, systems={}, endpoints={}",
-                                    retention / 3600,
-                                    all.avg_routes,
-                                    all.sample_count,
-                                    stats.total_systems,
-                                    stats.total_endpoints
-                                );
-                            }
-
-                            last_log_time = current_timestamp;
-                        }
+                    _ = tokio::time::sleep(Duration::from_secs(prune_interval)) => {
+                        let mut rt = rt_prune.write();
+                        rt.prune(Duration::from_secs(prune_ttl));
                     }
                 }
             }
         }));
-    }
 
-    // Stats Query Interface (Unix Socket)
-    #[cfg(unix)]
-    if let Some(socket_path) = config.general.stats_socket_path {
-        if !socket_path.is_empty() {
-            let name = format!("Stats Socket {}", socket_path);
-            let rt = routing_table.clone();
-            let task_token = cancel_token.child_token();
-            let path = socket_path.clone();
+        // Stats Reporting Task
+        let rt_stats = routing_table.clone();
+        let stats_token = cancel_token.child_token();
 
-            handles.push(tokio::spawn(supervise(
-                name,
-                task_token.clone(),
-                move || {
-                    let rt = rt.clone();
-                    let token = task_token.clone();
-                    let p = path.clone();
-                    async move { run_stats_server(p, rt, token).await }
-                },
-            )));
-        }
-    }
+        let sample_interval = config.general.stats_sample_interval_secs;
+        let retention = config.general.stats_retention_secs;
+        let log_interval = config.general.stats_log_interval_secs;
 
-    // Implicit TCP Server
-    if let Some(port) = config.general.tcp_port {
-        let name = format!("Implicit TCP Server :{}", port);
-        let bus_tx = bus.clone();
-        let bus_rx = bus.subscribe();
-        let rt = routing_table.clone();
-        let dd = dedup.clone();
-        let id = config.endpoint.len();
-        let filters = crate::filter::EndpointFilters::default();
-        let addr = format!("0.0.0.0:{}", port);
-        let task_token = cancel_token.child_token();
+        if sample_interval > 0 && retention > 0 {
+            handles.push(tokio::spawn(async move {
+                let mut history = StatsHistory::new(retention);
+                let mut last_log_time = 0u64;
 
-        handles.push(tokio::spawn(supervise(
-            name,
-            task_token.clone(),
-            move || {
-                let bus_tx = bus_tx.clone();
-                let bus_rx = bus_rx.resubscribe();
-                let rt = rt.clone();
-                let dd = dd.clone();
-                let filters = filters.clone();
-                let addr = addr.clone();
-                let m = crate::config::EndpointMode::Server;
-                let token = task_token.clone();
-                async move {
-                    crate::endpoints::tcp::run(id, addr, m, bus_tx, bus_rx, rt, dd, filters, token)
-                        .await
+                loop {
+                    tokio::select! {
+                        _ = stats_token.cancelled() => {
+                            info!("Stats Reporter shutting down.");
+                            break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(sample_interval)) => {
+                            let rt = rt_stats.read();
+                            let mut stats = rt.stats();
+                            drop(rt); // Release lock quickly
+                            // Ensure timestamp reflects sample time
+                            stats.timestamp = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+
+                            let current_timestamp = stats.timestamp;
+                            history.push(stats.clone());
+
+                            // Periodic logging
+                            if current_timestamp.saturating_sub(last_log_time) >= log_interval {
+                                // 1 minute aggregation
+                                if let Some(min1) = history.aggregate(60) {
+                                    info!(
+                                        "Stats [1min] avg={:.1} routes, range=[{}-{}]",
+                                        min1.avg_routes, min1.min_routes, min1.max_routes
+                                    );
+                                }
+
+                                // 1 hour aggregation
+                                if let Some(hour1) = history.aggregate(3600) {
+                                    info!(
+                                        "Stats [1hr] avg={:.1} routes, max={}",
+                                        hour1.avg_routes, hour1.max_routes
+                                    );
+                                }
+
+                                // Full retention aggregation
+                                if let Some(all) = history.aggregate(retention) {
+                                    info!(
+                                        "Stats [{}h] avg={:.1} routes, samples={}, systems={}, endpoints={}",
+                                        retention / 3600,
+                                        all.avg_routes,
+                                        all.sample_count,
+                                        stats.total_systems,
+                                        stats.total_endpoints
+                                    );
+                                }
+
+                                last_log_time = current_timestamp;
+                            }
+                        }
+                    }
                 }
-            },
-        )));
-    }
+            }));
+        }
 
-    // Logging
-    if let Some(log_dir) = &config.general.log {
-        if config.general.log_telemetry {
-            let name = format!("TLog Logger {}", log_dir);
+        // Stats Query Interface (Unix Socket)
+        #[cfg(unix)]
+        if let Some(socket_path) = config.general.stats_socket_path.clone() {
+            if !socket_path.is_empty() {
+                let name = format!("Stats Socket {}", socket_path);
+                let rt = routing_table.clone();
+                let task_token = cancel_token.child_token();
+                let path = socket_path.clone();
+
+                handles.push(tokio::spawn(supervise(
+                    name,
+                    task_token.clone(),
+                    move || {
+                        let rt = rt.clone();
+                        let token = task_token.clone();
+                        let p = path.clone();
+                        async move { run_stats_server(p, rt, token).await }
+                    },
+                )));
+            }
+        }
+
+        // Implicit TCP Server
+        if let Some(port) = config.general.tcp_port {
+            let name = format!("Implicit TCP Server :{}", port);
+            let bus_tx = bus.clone();
             let bus_rx = bus.subscribe();
-            let dir = log_dir.clone();
+            let rt = routing_table.clone();
+            let dd = dedup.clone();
+            let id = config.endpoint.len();
+            let filters = crate::filter::EndpointFilters::default();
+            let addr = format!("0.0.0.0:{}", port);
             let task_token = cancel_token.child_token();
 
             handles.push(tokio::spawn(supervise(
                 name,
                 task_token.clone(),
                 move || {
+                    let bus_tx = bus_tx.clone();
                     let bus_rx = bus_rx.resubscribe();
-                    let dir = dir.clone();
+                    let rt = rt.clone();
+                    let dd = dd.clone();
+                    let filters = filters.clone();
+                    let addr = addr.clone();
+                    let m = crate::config::EndpointMode::Server;
                     let token = task_token.clone();
-                    async move { crate::endpoints::tlog::run(dir, bus_rx, token).await }
+                    async move {
+                        crate::endpoints::tcp::run(id, addr, m, bus_tx, bus_rx, rt, dd, filters, token)
+                            .await
+                    }
                 },
             )));
         }
-    }
 
-    for (i, endpoint_config) in config.endpoint.iter().enumerate() {
-        let bus_tx = bus.clone();
-        let bus_rx = bus.subscribe();
-        let rt = routing_table.clone();
-        let dd = dedup.clone();
-        let task_token = cancel_token.child_token();
-
-        match endpoint_config {
-            EndpointConfig::Udp {
-                address,
-                mode,
-                filters,
-            } => {
-                let name = format!("UDP Endpoint {} ({})", i, address);
-                let addr = address.clone();
-                let m = mode.clone();
-                let f = filters.clone();
-                let cleanup_ttl = prune_ttl; // Capture prune_ttl here
+        // Logging
+        if let Some(log_dir) = &config.general.log {
+            if config.general.log_telemetry {
+                let name = format!("TLog Logger {}", log_dir);
+                let bus_rx = bus.subscribe();
+                let dir = log_dir.clone();
+                let task_token = cancel_token.child_token();
 
                 handles.push(tokio::spawn(supervise(
                     name,
                     task_token.clone(),
                     move || {
-                        let bus_tx = bus_tx.clone();
                         let bus_rx = bus_rx.resubscribe();
-                        let rt = rt.clone();
-                        let dd = dd.clone();
-                        let f = f.clone();
-                        let addr = addr.clone();
-                        let m = m.clone();
+                        let dir = dir.clone();
                         let token = task_token.clone();
-                        async move {
-                            crate::endpoints::udp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token, cleanup_ttl)
+                        async move { crate::endpoints::tlog::run(dir, bus_rx, token).await }
+                    },
+                )));
+            }
+        }
+
+        for (i, endpoint_config) in config.endpoint.iter().enumerate() {
+            let bus_tx = bus.clone();
+            let bus_rx = bus.subscribe();
+            let rt = routing_table.clone();
+            let dd = dedup.clone();
+            let task_token = cancel_token.child_token();
+
+            match endpoint_config {
+                EndpointConfig::Udp {
+                    address,
+                    mode,
+                    filters,
+                } => {
+                    let name = format!("UDP Endpoint {} ({})", i, address);
+                    let addr = address.clone();
+                    let m = mode.clone();
+                    let f = filters.clone();
+                    let cleanup_ttl = prune_ttl;
+
+                    handles.push(tokio::spawn(supervise(
+                        name,
+                        task_token.clone(),
+                        move || {
+                            let bus_tx = bus_tx.clone();
+                            let bus_rx = bus_rx.resubscribe();
+                            let rt = rt.clone();
+                            let dd = dd.clone();
+                            let f = f.clone();
+                            let addr = addr.clone();
+                            let m = m.clone();
+                            let token = task_token.clone();
+                            async move {
+                                crate::endpoints::udp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token, cleanup_ttl)
+                                    .await
+                            }
+                        },
+                    )));
+                }
+                EndpointConfig::Tcp {
+                    address,
+                    mode,
+                    filters,
+                } => {
+                    let name = format!("TCP Endpoint {} ({})", i, address);
+                    let addr = address.clone();
+                    let m = mode.clone();
+                    let f = filters.clone();
+
+                    handles.push(tokio::spawn(supervise(
+                        name,
+                        task_token.clone(),
+                        move || {
+                            let bus_tx = bus_tx.clone();
+                            let bus_rx = bus_rx.resubscribe();
+                            let rt = rt.clone();
+                            let dd = dd.clone();
+                            let f = f.clone();
+                            let addr = addr.clone();
+                            let m = m.clone();
+                            let token = task_token.clone();
+                            async move {
+                                crate::endpoints::tcp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token)
+                                    .await
+                            }
+                        },
+                    )));
+                }
+                EndpointConfig::Serial {
+                    device,
+                    baud,
+                    filters,
+                } => {
+                    let name = format!("Serial Endpoint {} ({})", i, device);
+                    let dev = device.clone();
+                    let b = *baud;
+                    let f = filters.clone();
+
+                    handles.push(tokio::spawn(supervise(
+                        name,
+                        task_token.clone(),
+                        move || {
+                            let bus_tx = bus_tx.clone();
+                            let bus_rx = bus_rx.resubscribe();
+                            let rt = rt.clone();
+                            let dd = dd.clone();
+                            let f = f.clone();
+                            let dev = dev.clone();
+                            let token = task_token.clone();
+                            async move {
+                                crate::endpoints::serial::run(
+                                    i, dev, b, bus_tx, bus_rx, rt, dd, f, token,
+                                )
                                 .await
-                        }
-                    },
-                )));
-            }
-            EndpointConfig::Tcp {
-                address,
-                mode,
-                filters,
-            } => {
-                let name = format!("TCP Endpoint {} ({})", i, address);
-                let addr = address.clone();
-                let m = mode.clone();
-                let f = filters.clone();
-
-                handles.push(tokio::spawn(supervise(
-                    name,
-                    task_token.clone(),
-                    move || {
-                        let bus_tx = bus_tx.clone();
-                        let bus_rx = bus_rx.resubscribe();
-                        let rt = rt.clone();
-                        let dd = dd.clone();
-                        let f = f.clone();
-                        let addr = addr.clone();
-                        let m = m.clone();
-                        let token = task_token.clone();
-                        async move {
-                            crate::endpoints::tcp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token)
-                                .await
-                        }
-                    },
-                )));
-            }
-            EndpointConfig::Serial {
-                device,
-                baud,
-                filters,
-            } => {
-                let name = format!("Serial Endpoint {} ({})", i, device);
-                let dev = device.clone();
-                let b = *baud;
-                let f = filters.clone();
-
-                handles.push(tokio::spawn(supervise(
-                    name,
-                    task_token.clone(),
-                    move || {
-                        let bus_tx = bus_tx.clone();
-                        let bus_rx = bus_rx.resubscribe();
-                        let rt = rt.clone();
-                        let dd = dd.clone();
-                        let f = f.clone();
-                        let dev = dev.clone();
-                        let token = task_token.clone();
-                        async move {
-                            crate::endpoints::serial::run(
-                                i, dev, b, bus_tx, bus_rx, rt, dd, f, token,
-                            )
-                            .await
-                        }
-                    },
-                )));
+                            }
+                        },
+                    )));
+                }
             }
         }
-    }
 
-    if handles.is_empty() {
-        info!("No endpoints configured. Exiting.");
-        return Ok(());
-    }
-
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            info!("Ctrl+C received. Initiating graceful shutdown...");
+        if handles.is_empty() {
+            info!("No endpoints configured. Exiting.");
+            return Ok(());
         }
-        _ = futures::future::join_all(handles) => {
-            info!("All supervised tasks completed/failed. Shutting down.");
-        }
-    }
-    cancel_token.cancel();
 
-    // Give tasks time to flush (e.g. tlog)
-    tokio::time::sleep(Duration::from_secs(2)).await;
+        let mut reload = false;
+        let mut all_tasks = Box::pin(futures::future::join_all(handles));
+
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Ctrl+C received. Initiating graceful shutdown...");
+                    break;
+                }
+                _ = sig_hup.recv() => {
+                    info!("SIGHUP received. Checking configuration for reload...");
+                    match Config::load(&args.config).await {
+                        Ok(_) => {
+                            info!("Configuration valid. Restarting...");
+                            reload = true;
+                            break;
+                        }
+                        Err(e) => {
+                            error!("Configuration invalid: {}. Ignoring SIGHUP.", e);
+                        }
+                    }
+                }
+                _ = &mut all_tasks => {
+                    info!("All supervised tasks completed/failed. Shutting down.");
+                    break;
+                }
+            }
+        }
+
+        cancel_token.cancel();
+
+        if !reload {
+            break;
+        }
+
+        // Give tasks time to flush (e.g. tlog) and cleanup
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        info!("Restarting system...");
+    }
+
     info!("Shutdown complete.");
-
     Ok(())
 }
 
