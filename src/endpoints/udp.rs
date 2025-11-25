@@ -8,17 +8,18 @@
 //! broadcasting messages back to them. In client mode, it continuously sends
 //! to a predefined remote address.
 
-use crate::dedup::Dedup;
+use crate::dedup::ConcurrentDedup;
 use crate::endpoint_core::EndpointCore;
 use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::framing::MavlinkFrame;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
+use bytes::Bytes;
 use dashmap::DashMap;
-use futures::future::join_all; // Added join_all
+use futures::future::join_all;
 use mavlink::MavlinkVersion;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::io::Cursor;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
@@ -67,7 +68,7 @@ pub async fn run(
     bus_tx: broadcast::Sender<RoutedMessage>,
     bus_rx: broadcast::Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
-    dedup: Arc<Mutex<Dedup>>,
+    dedup: ConcurrentDedup,
     filters: EndpointFilters,
     token: CancellationToken,
     cleanup_ttl_secs: u64,
@@ -78,6 +79,7 @@ pub async fn run(
         routing_table: routing_table.clone(),
         dedup: dedup.clone(),
         filters: filters.clone(),
+        update_routing: true,
     };
 
     let (bind_addr, target_addr) = if mode == crate::config::EndpointMode::Server {
@@ -124,11 +126,15 @@ pub async fn run(
                         });
 
                     if let Ok((header, message, version)) = res {
+                        // Capture raw bytes from UDP datagram (zero-copy)
+                        let packet_len = cursor.position() as usize;
+                        let raw_bytes = Bytes::copy_from_slice(&buf[..packet_len]);
                         // Use Core logic
                         core_rx.handle_incoming_frame(MavlinkFrame {
                             header,
                             message,
                             version,
+                            raw_bytes,
                         });
                     }
                 }

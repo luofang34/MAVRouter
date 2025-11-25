@@ -168,9 +168,10 @@ def main():
         t3, m3 = run_load_round("Round 3: Extreme Load", 10, 100, 200)
 
         threshold_r2 = 5000
-        # Baseline: ~11,200 msg/s with optimizations (TCP_NODELAY, broadcast fast path)
-        # Minimum threshold set at 10,000 to catch regressions while allowing variance
-        threshold_r3 = 10000
+        # Baseline: ~9,000 msg/s with per-client EndpointId (required for correct multiclient routing)
+        # Per-client ID has ~20% overhead vs shared ID but is necessary for TCP server clients
+        # to correctly forward messages between each other
+        threshold_r3 = 9000
         max_mem_growth = 50.0
 
     elif args.profile == 'serial':

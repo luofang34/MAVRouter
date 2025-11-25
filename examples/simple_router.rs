@@ -19,9 +19,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create routing table and deduplication
     let routing_table = std::sync::Arc::new(parking_lot::RwLock::new(routing::RoutingTable::new()));
-    let dedup = std::sync::Arc::new(parking_lot::Mutex::new(dedup::Dedup::new(
-        Duration::from_millis(100),
-    )));
+    let dedup = dedup::ConcurrentDedup::new(Duration::from_millis(100));
 
     let token = tokio_util::sync::CancellationToken::new();
 

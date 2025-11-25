@@ -10,12 +10,12 @@
 
 use mavlink::{MavHeader, Message};
 use mavrouter_rs::config::EndpointMode;
-use mavrouter_rs::dedup::Dedup;
+use mavrouter_rs::dedup::ConcurrentDedup;
 use mavrouter_rs::endpoints::tcp;
 use mavrouter_rs::filter::EndpointFilters;
 use mavrouter_rs::router::create_bus;
 use mavrouter_rs::routing::RoutingTable;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,7 +47,7 @@ async fn read_mavlink_message(
 async fn test_targeted_message_routing() {
     let bus = create_bus(100);
     let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-    let dedup = Arc::new(Mutex::new(Dedup::new(Duration::from_millis(0))));
+    let dedup = ConcurrentDedup::new(Duration::from_millis(0));
     let filters = EndpointFilters::default();
     let token = CancellationToken::new();
 
@@ -186,7 +186,7 @@ async fn test_targeted_message_routing() {
 async fn test_unknown_target_dropped() {
     let bus = create_bus(100);
     let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-    let dedup = Arc::new(Mutex::new(Dedup::new(Duration::from_millis(0))));
+    let dedup = ConcurrentDedup::new(Duration::from_millis(0));
     let filters = EndpointFilters::default();
     let token = CancellationToken::new();
 

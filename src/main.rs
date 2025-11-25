@@ -19,14 +19,14 @@ mod routing;
 mod stats;
 
 use crate::config::{Config, EndpointConfig};
-use crate::dedup::Dedup;
+use crate::dedup::ConcurrentDedup;
 use crate::endpoint_core::ExponentialBackoff;
 use crate::error::Result;
 use crate::router::create_bus;
 use crate::routing::RoutingTable;
 use crate::stats::StatsHistory;
 use clap::Parser;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
@@ -191,10 +191,10 @@ async fn main() -> Result<()> {
         let cancel_token = CancellationToken::new(); // Correct placement
 
         let dedup_period = config.general.dedup_period_ms.unwrap_or(0);
-        let dedup = Arc::new(Mutex::new(Dedup::new(Duration::from_millis(dedup_period))));
+        let dedup = ConcurrentDedup::new(Duration::from_millis(dedup_period));
 
         // Only spawn dedup rotator if dedup is enabled (rotation_interval > 0)
-        let dedup_rotation_interval = dedup.lock().rotation_interval();
+        let dedup_rotation_interval = dedup.rotation_interval();
         if !dedup_rotation_interval.is_zero() {
             let dedup_rotator = dedup.clone();
             let dedup_token = cancel_token.child_token();
@@ -207,7 +207,7 @@ async fn main() -> Result<()> {
                             break;
                         }
                         _ = interval.tick() => {
-                            dedup_rotator.lock().rotate_bucket();
+                            dedup_rotator.rotate_buckets();
                         }
                     }
                 }

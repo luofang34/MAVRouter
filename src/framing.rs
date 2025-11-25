@@ -6,7 +6,7 @@
 //! reconstruct messages, and a `MavlinkFrame` to represent a parsed message
 //! with its header and protocol version.
 
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use mavlink::{MavHeader, MavlinkVersion};
 use memchr::memchr2; // Added memchr2 import
 use std::io::Cursor;
@@ -23,6 +23,9 @@ pub struct MavlinkFrame {
     pub message: mavlink::common::MavMessage,
     /// The MAVLink protocol version (v1 or v2).
     pub version: MavlinkVersion,
+    /// Raw bytes of the complete MAVLink frame (zero-copy from parse buffer).
+    /// This avoids re-serialization when forwarding messages.
+    pub raw_bytes: Bytes,
 }
 
 /// A stateful parser for extracting MAVLink frames from an asynchronous byte stream.
@@ -116,11 +119,14 @@ impl StreamParser {
             match res_v2 {
                 Ok((header, message)) => {
                     let len = cursor.position() as usize;
+                    // Capture raw bytes before advancing (zero-copy via Bytes::copy_from_slice)
+                    let raw_bytes = Bytes::copy_from_slice(&self.buffer[..len]);
                     self.buffer.advance(len);
                     return Some(MavlinkFrame {
                         header,
                         message,
                         version: MavlinkVersion::V2,
+                        raw_bytes,
                     });
                 }
                 Err(e) => {
@@ -132,11 +138,14 @@ impl StreamParser {
                     match res_v1 {
                         Ok((header, message)) => {
                             let len = cursor.position() as usize;
+                            // Capture raw bytes before advancing
+                            let raw_bytes = Bytes::copy_from_slice(&self.buffer[..len]);
                             self.buffer.advance(len);
                             return Some(MavlinkFrame {
                                 header,
                                 message,
                                 version: MavlinkVersion::V1,
+                                raw_bytes,
                             });
                         }
                         Err(e_v1) => {

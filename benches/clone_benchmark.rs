@@ -1,21 +1,23 @@
 use bytes::Bytes;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use mavlink::common::MavMessage;
 use mavlink::MavHeader;
 use mavlink::MavlinkVersion;
+use mavrouter_rs::mavlink_utils::MessageTarget;
 use mavrouter_rs::router::{EndpointId, RoutedMessage};
-use std::sync::Arc;
 
 fn bench_routed_message_clone(c: &mut Criterion) {
     let header = MavHeader::default();
-    let message = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
     let routed = RoutedMessage {
         source_id: EndpointId(0),
         header,
-        message: Arc::new(message),
+        message_id: 0, // HEARTBEAT message ID
         version: MavlinkVersion::V2,
         timestamp_us: 0,
         serialized_bytes: Bytes::new(),
+        target: MessageTarget {
+            system_id: 0,
+            component_id: 0,
+        },
     };
 
     c.bench_function("routed_message_clone", |b| {

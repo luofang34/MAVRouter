@@ -1,8 +1,12 @@
 use crate::router::EndpointId;
-use std::collections::hash_map::Entry; // Added for Entry enum
-use std::collections::{HashMap, HashSet};
+use ahash::{AHashMap, AHashSet};
+use std::collections::hash_map::Entry;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
+
+// Type aliases using ahash for faster hashing
+type HashMap<K, V> = AHashMap<K, V>;
+type HashSet<T> = AHashSet<T>;
 
 // Constants for routing table capacity limits
 const MAX_ROUTES: usize = 100_000;
@@ -171,19 +175,75 @@ impl RoutingTable {
     }
 
     /// Checks if an update is needed for the given route.
-    /// An update is needed if the route is unknown or the last update was more than 1 second ago.
+    /// An update is needed if the route is unknown, the endpoint isn't registered,
+    /// or the last update was more than 1 second ago.
     #[allow(dead_code)] // This function is used in src/endpoint_core.rs
-    pub fn needs_update(&self, sysid: u8, compid: u8, now: Instant) -> bool {
-        let comp_fresh = self
-            .routes
-            .get(&(sysid, compid))
-            .is_some_and(|e| now.duration_since(e.last_seen) < Duration::from_secs(1));
-        let sys_fresh = self
-            .sys_routes
-            .get(&sysid)
-            .is_some_and(|e| now.duration_since(e.last_seen) < Duration::from_secs(1));
+    pub fn needs_update_for_endpoint(
+        &self,
+        endpoint_id: EndpointId,
+        sysid: u8,
+        compid: u8,
+        now: Instant,
+    ) -> bool {
+        // Check component route
+        let comp_entry = self.routes.get(&(sysid, compid));
+        let comp_needs_update = match comp_entry {
+            None => true, // Route doesn't exist
+            Some(e) => {
+                // Needs update if endpoint not in set OR entry is stale
+                !e.endpoints.contains(&endpoint_id)
+                    || now.duration_since(e.last_seen) >= Duration::from_secs(1)
+            }
+        };
 
-        !(comp_fresh && sys_fresh)
+        // Check system route
+        let sys_entry = self.sys_routes.get(&sysid);
+        let sys_needs_update = match sys_entry {
+            None => true, // System route doesn't exist
+            Some(e) => {
+                !e.endpoints.contains(&endpoint_id)
+                    || now.duration_since(e.last_seen) >= Duration::from_secs(1)
+            }
+        };
+
+        comp_needs_update || sys_needs_update
+    }
+
+    /// Combined check-and-update operation that avoids double-locking.
+    /// Returns true if an update was performed, false if skipped.
+    /// This is more efficient than calling needs_update_for_endpoint() + update() separately.
+    #[inline]
+    pub fn update_if_needed(
+        &mut self,
+        endpoint_id: EndpointId,
+        sysid: u8,
+        compid: u8,
+        now: Instant,
+    ) -> bool {
+        // Check if any update is needed (fast path - most messages don't need updates)
+        let comp_needs_update = match self.routes.get(&(sysid, compid)) {
+            None => true,
+            Some(e) => {
+                !e.endpoints.contains(&endpoint_id)
+                    || now.duration_since(e.last_seen) >= Duration::from_secs(1)
+            }
+        };
+
+        let sys_needs_update = match self.sys_routes.get(&sysid) {
+            None => true,
+            Some(e) => {
+                !e.endpoints.contains(&endpoint_id)
+                    || now.duration_since(e.last_seen) >= Duration::from_secs(1)
+            }
+        };
+
+        if !comp_needs_update && !sys_needs_update {
+            return false; // No update needed
+        }
+
+        // Perform the actual update (reuse the update() method logic)
+        self.update(endpoint_id, sysid, compid, now);
+        true
     }
 
     /// Determines if a message targeting `(target_sysid, target_compid)`

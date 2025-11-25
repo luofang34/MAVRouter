@@ -5,13 +5,13 @@
 //! serial MAVLink devices. It supports automatic reconnection if the
 //! serial port connection is lost.
 
-use crate::dedup::Dedup;
+use crate::dedup::ConcurrentDedup;
 use crate::endpoint_core::{run_stream_loop, EndpointCore};
 use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -57,7 +57,7 @@ pub async fn run(
     bus_tx: broadcast::Sender<RoutedMessage>,
     bus_rx: broadcast::Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
-    dedup: Arc<Mutex<Dedup>>,
+    dedup: ConcurrentDedup,
     filters: EndpointFilters,
     token: CancellationToken,
 ) -> Result<()> {
@@ -67,6 +67,7 @@ pub async fn run(
         routing_table: routing_table.clone(),
         dedup: dedup.clone(),
         filters: filters.clone(),
+        update_routing: true,
     };
 
     loop {

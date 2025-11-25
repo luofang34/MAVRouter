@@ -8,13 +8,13 @@
 //! In **client mode**, it attempts to connect to a remote TCP server and
 //! automatically retries connection if lost.
 
-use crate::dedup::Dedup;
+use crate::dedup::ConcurrentDedup;
 use crate::endpoint_core::{run_stream_loop, EndpointCore, ExponentialBackoff};
 use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -61,7 +61,7 @@ pub async fn run(
     bus_tx: broadcast::Sender<RoutedMessage>,
     bus_rx: broadcast::Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
-    dedup: Arc<Mutex<Dedup>>,
+    dedup: ConcurrentDedup,
     filters: EndpointFilters,
     token: CancellationToken,
 ) -> Result<()> {
@@ -71,6 +71,7 @@ pub async fn run(
         routing_table: routing_table.clone(),
         dedup: dedup.clone(),
         filters: filters.clone(),
+        update_routing: true, // TCP client mode updates routing table
     };
 
     match mode {
@@ -104,6 +105,7 @@ pub async fn run(
                                     routing_table: core.routing_table.clone(),
                                     dedup: core.dedup.clone(),
                                     filters: core.filters.clone(),
+                                    update_routing: true, // Required for targeted message routing
                                 };
                                 let rx_client = bus_rx.resubscribe();
                                 let token_client = token.clone();

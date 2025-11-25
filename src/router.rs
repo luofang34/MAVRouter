@@ -1,8 +1,9 @@
-use bytes::Bytes; // Added bytes::Bytes import
-use mavlink::{common::MavMessage, MavHeader, MavlinkVersion};
+use bytes::Bytes;
+use mavlink::{MavHeader, MavlinkVersion};
 use std::fmt;
-use std::sync::Arc;
 use tokio::sync::broadcast;
+
+use crate::mavlink_utils::MessageTarget;
 
 /// Unique identifier for a routing endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -15,21 +16,26 @@ impl fmt::Display for EndpointId {
 }
 
 /// A routed MAVLink message with source information.
+///
+/// Optimized for zero-copy forwarding: contains raw bytes and cached metadata
+/// instead of the parsed message to avoid heap allocation and Arc overhead.
 #[derive(Clone, Debug)]
 pub struct RoutedMessage {
     /// Identifier of the source endpoint that received this message.
     pub source_id: EndpointId,
     /// MAVLink message header containing system_id, component_id, and sequence number.
     pub header: MavHeader,
-    /// The actual MAVLink message payload.
-    pub message: Arc<MavMessage>,
+    /// Cached MAVLink message ID (avoids calling message.message_id() per endpoint).
+    pub message_id: u32,
     /// The MAVLink protocol version used for this message (V1 or V2).
     #[allow(dead_code)]
     pub version: MavlinkVersion,
     /// Arrival timestamp in microseconds since UNIX EPOCH.
     pub timestamp_us: u64,
-    /// Cached serialized message bytes to avoid re-serialization.
+    /// Cached serialized message bytes (zero-copy from parser).
     pub serialized_bytes: Bytes,
+    /// Cached target information to avoid repeated extract_target calls across endpoints.
+    pub target: MessageTarget,
 }
 
 /// Type alias for the message bus sender.
@@ -70,7 +76,6 @@ pub fn create_bus(capacity: usize) -> MessageBus {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use mavlink::common::HEARTBEAT_DATA;
 
     #[tokio::test]
     async fn test_bus_filtering() {
@@ -80,10 +85,14 @@ mod tests {
         let msg = RoutedMessage {
             source_id: EndpointId(1),
             header: MavHeader::default(),
-            message: Arc::new(MavMessage::HEARTBEAT(HEARTBEAT_DATA::default())),
+            message_id: 0, // HEARTBEAT message ID
             version: MavlinkVersion::V2,
             timestamp_us: 0,
             serialized_bytes: Bytes::new(),
+            target: MessageTarget {
+                system_id: 0,
+                component_id: 0,
+            },
         };
 
         bus.send(msg.clone()).expect("Failed to send test message");

@@ -1,13 +1,13 @@
 #![allow(clippy::unwrap_used)]
 
 use bytes::Bytes;
-use mavlink::{MavHeader, MavlinkVersion};
-use mavrouter_rs::dedup::Dedup;
+use mavlink::{MavHeader, MavlinkVersion, Message};
+use mavrouter_rs::dedup::ConcurrentDedup;
 use mavrouter_rs::endpoint_core::{run_stream_loop, EndpointCore};
 use mavrouter_rs::filter::EndpointFilters;
 use mavrouter_rs::router::{create_bus, EndpointId, RoutedMessage};
 use mavrouter_rs::routing::RoutingTable;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 async fn test_stream_loopback() {
     let bus = create_bus(100);
     let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-    let dedup = Arc::new(Mutex::new(Dedup::new(Duration::from_millis(0))));
+    let dedup = ConcurrentDedup::new(Duration::from_millis(0));
     let filters = EndpointFilters::default();
     let token = CancellationToken::new();
 
@@ -30,6 +30,7 @@ async fn test_stream_loopback() {
         routing_table,
         dedup,
         filters,
+        update_routing: true,
     };
 
     let (mut client, server) = tokio::io::duplex(4096);
@@ -72,10 +73,14 @@ async fn test_stream_loopback() {
     let msg_out = RoutedMessage {
         source_id: EndpointId(2), // From another endpoint
         header,
-        message: Arc::new(message),
+        message_id: message.message_id(),
         version: MavlinkVersion::V2,
         timestamp_us: 0,
         serialized_bytes: Bytes::from(buf_out),
+        target: mavrouter_rs::mavlink_utils::MessageTarget {
+            system_id: 0,
+            component_id: 0,
+        },
     };
     bus.send(msg_out).unwrap();
 
