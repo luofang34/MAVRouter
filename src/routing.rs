@@ -67,9 +67,8 @@ impl RoutingTable {
     /// * `endpoint_id` - The ID of the endpoint where the message was received.
     /// * `sysid` - The MAVLink system ID of the message sender.
     /// * `compid` - The MAVLink component ID of the message sender.
-    pub fn update(&mut self, endpoint_id: EndpointId, sysid: u8, compid: u8) {
-        let now = Instant::now();
-
+    /// * `now` - The timestamp of the observation.
+    pub fn update(&mut self, endpoint_id: EndpointId, sysid: u8, compid: u8, now: Instant) {
         // Enforce MAX_ROUTES limit
         if self.routes.len() >= MAX_ROUTES {
             warn!(
@@ -118,6 +117,24 @@ impl RoutingTable {
                 endpoints: HashSet::from([endpoint_id]),
                 last_seen: now,
             });
+    }
+
+    /// Checks if an update is needed for the given route.
+    /// An update is needed if the route is unknown or the last update was more than 1 second ago.
+    pub fn needs_update(&self, sysid: u8, compid: u8, now: Instant) -> bool {
+        if let Some(entry) = self.routes.get(&(sysid, compid)) {
+            if now.duration_since(entry.last_seen) > Duration::from_secs(1) {
+                return true;
+            }
+            // Check system route as well
+            if let Some(sys_entry) = self.sys_routes.get(&sysid) {
+                if now.duration_since(sys_entry.last_seen) > Duration::from_secs(1) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        true
     }
 
     /// Determines if a message targeting `(target_sysid, target_compid)`
@@ -217,7 +234,7 @@ impl RoutingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     fn stress_iterations() -> usize {
         // CI Environment detection
@@ -239,7 +256,7 @@ mod tests {
     #[test]
     fn test_routing_table_basic_learning() {
         let mut rt = RoutingTable::new();
-        rt.update(EndpointId(1), 100, 1);
+        rt.update(EndpointId(1), 100, 1, Instant::now());
 
         assert!(rt.should_send(EndpointId(1), 100, 0));
         assert!(rt.should_send(EndpointId(1), 100, 1));
@@ -254,8 +271,8 @@ mod tests {
 
         // Endpoint 1 sees sys 100 comp 1
         // Endpoint 2 sees sys 100 comp 2
-        rt.update(EndpointId(1), 100, 1);
-        rt.update(EndpointId(2), 100, 2);
+        rt.update(EndpointId(1), 100, 1, Instant::now());
+        rt.update(EndpointId(2), 100, 2, Instant::now());
 
         // System-wide (comp=0) goes to both
         assert!(rt.should_send(EndpointId(1), 100, 0));
@@ -297,8 +314,8 @@ mod tests {
 
         // Endpoint 1: autopilot on sys 100
         // Endpoint 2: autopilot on sys 200
-        rt.update(EndpointId(1), 100, 1);
-        rt.update(EndpointId(2), 200, 1);
+        rt.update(EndpointId(1), 100, 1, Instant::now());
+        rt.update(EndpointId(2), 200, 1, Instant::now());
 
         // Message to sys 100 should ONLY go to endpoint 1
         assert!(rt.should_send(EndpointId(1), 100, 0));
@@ -312,7 +329,7 @@ mod tests {
     #[test]
     fn test_broadcast_always_sends() {
         let mut rt = RoutingTable::new();
-        rt.update(EndpointId(1), 100, 1);
+        rt.update(EndpointId(1), 100, 1, Instant::now());
         assert!(rt.should_send(EndpointId(1), 0, 0));
         assert!(rt.should_send(EndpointId(999), 0, 0));
     }
@@ -320,14 +337,14 @@ mod tests {
     #[test]
     fn test_unknown_system_no_route() {
         let mut rt = RoutingTable::new();
-        rt.update(EndpointId(1), 100, 1);
+        rt.update(EndpointId(1), 100, 1, Instant::now());
         assert!(!rt.should_send(EndpointId(1), 200, 0));
     }
 
     #[test]
     fn test_pruning() {
         let mut rt = RoutingTable::new();
-        rt.update(EndpointId(1), 100, 1);
+        rt.update(EndpointId(1), 100, 1, Instant::now());
         assert!(rt.should_send(EndpointId(1), 100, 0));
         std::thread::sleep(Duration::from_millis(50));
         rt.prune(Duration::from_millis(10));
@@ -348,7 +365,7 @@ mod tests {
             // Component ID 1-250 rotating
             let comp = ((i % 250) + 1) as u8;
 
-            rt.update(endpoint, sys, comp);
+            rt.update(endpoint, sys, comp, Instant::now());
 
             // Prune frequently to simulate aggressive cleanup
             if i % 1000 == 0 {
@@ -387,7 +404,7 @@ mod tests {
         for i in 0..MAX_ROUTES + 1000 {
             let sys = ((i / 255) % 255) as u8;
             let comp = (i % 255) as u8;
-            rt.update(EndpointId(1), sys, comp);
+            rt.update(EndpointId(1), sys, comp, Instant::now());
         }
 
         let stats = rt.stats();
@@ -417,7 +434,7 @@ mod tests {
 
         // Test MAX_SYSTEMS limit
         for sys in 0..MAX_SYSTEMS + 100 {
-            rt.update(EndpointId(1), (sys % 255) as u8, 1);
+            rt.update(EndpointId(1), (sys % 255) as u8, 1, Instant::now());
             // Note: sysid is u8, so max 255. MAX_SYSTEMS is 1000.
             // So we can't really exceed 255 unique systems with u8 sysid!
             // The limit 1000 is technically unreachable for standard MAVLink u8 sysid.
@@ -437,14 +454,14 @@ mod tests {
 
         // Fill with some data
         for i in 0..1000 {
-            rt.update(EndpointId(1), (i % 250) as u8, 1);
+            rt.update(EndpointId(1), (i % 250) as u8, 1, Instant::now());
         }
 
         // Trigger capacity limit logic (by calling update many times)
         // Since we can't mock time easily here to make them "old",
         // this test mainly verifies the code path runs without error.
         for i in 0..MAX_ROUTES {
-            rt.update(EndpointId(2), ((i % 250) + 1) as u8, 1);
+            rt.update(EndpointId(2), ((i % 250) + 1) as u8, 1, Instant::now());
         }
 
         let stats = rt.stats();

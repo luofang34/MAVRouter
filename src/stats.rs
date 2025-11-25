@@ -70,12 +70,24 @@ impl StatsHistory {
             return None;
         }
 
-        let sum_routes: usize = window.clone().map(|s| s.total_routes).sum();
-        let avg_routes = sum_routes as f64 / window_len as f64;
+        // Single-pass computation of sum, min, max
+        let (sum_routes, min_routes, max_routes) = window.fold(
+            (0usize, usize::MAX, 0usize),
+            |(sum, min, max), s| {
+                (
+                    sum + s.total_routes,
+                    min.min(s.total_routes),
+                    max.max(s.total_routes),
+                )
+            },
+        );
 
-        // We can use the iterator directly for min/max
-        let max_routes = window.clone().map(|s| s.total_routes).max()?;
-        let min_routes = window.clone().map(|s| s.total_routes).min()?;
+        // Handle edge case where fold ran on empty iterator (shouldn't happen due to earlier check)
+        if max_routes == 0 && min_routes == usize::MAX {
+            return None;
+        }
+
+        let avg_routes = sum_routes as f64 / window_len as f64;
 
         Some(AggregatedStats {
             avg_routes,
