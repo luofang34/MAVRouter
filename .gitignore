@@ -1,6 +1,11 @@
 /target
 **/*.rs.bk
 
+# Coverage reports
+tarpaulin-report.json
+tarpaulin-report.xml
+cobertura.xml
+
 # Runtime logs and telemetry
 *.log
 logs/

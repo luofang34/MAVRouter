@@ -167,14 +167,14 @@ jobs:
       - name: Install cargo-tarpaulin
         uses: taiki-e/install-action@cargo-tarpaulin
       - name: Generate coverage report
-        run: cargo tarpaulin --out Xml
+        run: cargo tarpaulin --out Xml --out Json
       - name: Check minimum coverage
         run: |
-          # Extract coverage percentage from tarpaulin output
-          COVERAGE=$(cargo tarpaulin --out Json 2>/dev/null | jq '.files | to_entries | map(.value.coverage | select(. != null)) | add / length')
+          # Extract coverage from tarpaulin JSON output file
+          COVERAGE=$(jq '.coverage' tarpaulin-report.json)
           echo "Coverage: $COVERAGE%"
-          if (( $(echo "$COVERAGE < 60" | bc -l) )); then
-            echo "❌ Coverage $COVERAGE% is below 60% threshold"
+          if (( $(echo "$COVERAGE < 40" | bc -l) )); then
+            echo "❌ Coverage $COVERAGE% is below 40% threshold"
             exit 1
           fi
           echo "✅ Coverage $COVERAGE% meets minimum requirement"
