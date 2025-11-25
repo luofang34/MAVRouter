@@ -37,14 +37,6 @@ pub enum RouterError {
         source: tokio_serial::Error,
     },
 
-    /// Routing errors (invalid system/component IDs, routing table issues)
-    #[error("Routing error: {0}")]
-    Routing(String),
-
-    /// MAVLink protocol errors (invalid frames, parsing failures)
-    #[error("MAVLink protocol error: {0}")]
-    Protocol(String),
-
     /// File system errors (log file creation, stats socket)
     #[error("Filesystem error at '{path}': {source}")]
     Filesystem {
@@ -53,15 +45,6 @@ pub enum RouterError {
         /// Underlying I/O error
         #[source]
         source: io::Error,
-    },
-
-    /// Endpoint initialization errors
-    #[error("Failed to initialize {endpoint_type} endpoint: {reason}")]
-    EndpointInit {
-        /// Type of endpoint (TCP, UDP, Serial, etc.)
-        endpoint_type: String,
-        /// Reason for failure
-        reason: String,
     },
 
     /// Other unexpected errors
@@ -94,35 +77,12 @@ impl RouterError {
         }
     }
 
-    /// Create a new routing error
-    pub fn routing(msg: impl Into<String>) -> Self {
-        Self::Routing(msg.into())
-    }
-
-    /// Create a new protocol error
-    pub fn protocol(msg: impl Into<String>) -> Self {
-        Self::Protocol(msg.into())
-    }
-
     /// Create a new filesystem error
     pub fn filesystem(path: impl Into<String>, source: io::Error) -> Self {
         Self::Filesystem {
             path: path.into(),
             source,
         }
-    }
-
-    /// Create a new endpoint initialization error
-    pub fn endpoint_init(endpoint_type: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::EndpointInit {
-            endpoint_type: endpoint_type.into(),
-            reason: reason.into(),
-        }
-    }
-
-    /// Create a new internal error
-    pub fn internal(msg: impl Into<String>) -> Self {
-        Self::Internal(msg.into())
     }
 }
 
