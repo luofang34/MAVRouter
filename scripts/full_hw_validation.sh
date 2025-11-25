@@ -57,7 +57,7 @@ run_test() {
     echo "Script: $script"
     echo "Timeout: ${timeout_sec}s"
     
-    if timeout "$timeout_sec" python3 "$script"; then
+    if timeout "$timeout_sec" python3 $script; then
         echo "✅ PASSED: $description"
     else
         local exit_code=$?
@@ -85,6 +85,7 @@ run_test "UDP Broadcast (UDP <-> Serial)" "tests/integration/verify_udp.py" 30 f
 echo "=== Tier 2: Important Validation (Should Pass) ==="
 run_test "Parameter Operations (Read/Write)" "tests/integration/verify_params.py" 45 false
 run_test "Multi-Client Support (TCP Broadcast)" "tests/integration/verify_multiclient.py" 30 false
+run_test "Serial Load (Saturation)" "tests/integration/loop_stress_test.py --profile serial" 30 false
 
 echo "--------------------------------------------------"
 echo "Restarting Router for Stress Tests (No Hardware)..."
