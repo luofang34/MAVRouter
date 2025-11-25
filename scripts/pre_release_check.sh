@@ -14,21 +14,27 @@ echo "========================================="
 echo "Pre-Release Validation"
 echo "========================================="
 
-# 1. Rust tests
+# 1. Format check
 echo ""
-echo "[1/3] Running Rust tests (release mode)..."
+echo "[1/4] Checking code formatting..."
+cargo fmt --all --check
+echo "✅ Format check passed"
+
+# 2. Rust tests
+echo ""
+echo "[2/4] Running Rust tests (release mode)..."
 cargo test --release --all-targets --quiet
 echo "✅ Rust tests passed"
 
-# 2. Clippy
+# 3. Clippy
 echo ""
-echo "[2/3] Running clippy..."
+echo "[3/4] Running clippy..."
 cargo clippy --all-targets -- -D warnings
 echo "✅ Clippy passed"
 
-# 3. Hardware tests
+# 4. Hardware tests
 echo ""
-echo "[3/3] Hardware validation..."
+echo "[4/4] Hardware validation..."
 
 # Check if user wants to skip
 if [ "${SKIP_HW_TEST}" = "1" ]; then
