@@ -26,16 +26,19 @@ use crate::stats::StatsHistory;
 use anyhow::Result;
 use clap::Parser;
 use parking_lot::{Mutex, RwLock};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixListener;
-use tokio_util::sync::CancellationToken;
+use tokio::util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::path::Path;
+#[cfg(unix)]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(unix)]
+use tokio::net::UnixListener;
 
 #[cfg(unix)]
 async fn run_stats_server(
