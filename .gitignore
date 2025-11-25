@@ -8,3 +8,5 @@ logs/
 
 # Runtime test logs
 router_*.log
+
+*.txt
