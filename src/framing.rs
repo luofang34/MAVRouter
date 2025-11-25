@@ -119,9 +119,8 @@ impl StreamParser {
             match res_v2 {
                 Ok((header, message)) => {
                     let len = cursor.position() as usize;
-                    // Capture raw bytes before advancing (zero-copy via Bytes::copy_from_slice)
-                    let raw_bytes = Bytes::copy_from_slice(&self.buffer[..len]);
-                    self.buffer.advance(len);
+                    // Zero-copy slice out the parsed frame
+                    let raw_bytes = self.buffer.split_to(len).freeze();
                     return Some(MavlinkFrame {
                         header,
                         message,
@@ -138,9 +137,8 @@ impl StreamParser {
                     match res_v1 {
                         Ok((header, message)) => {
                             let len = cursor.position() as usize;
-                            // Capture raw bytes before advancing
-                            let raw_bytes = Bytes::copy_from_slice(&self.buffer[..len]);
-                            self.buffer.advance(len);
+                            // Zero-copy slice out the parsed frame
+                            let raw_bytes = self.buffer.split_to(len).freeze();
                             return Some(MavlinkFrame {
                                 header,
                                 message,

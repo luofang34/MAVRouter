@@ -39,6 +39,7 @@ bytes = "1.0"
 ahash = "0.8"
 dashmap = "5.5"
 memchr = "2.7"
+async-broadcast = "0.7"
 
 [dev-dependencies]
 serial_test = "3.0"

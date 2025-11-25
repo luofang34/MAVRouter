@@ -53,7 +53,7 @@ async fn test_targeted_message_routing() {
 
     // Start 3 TCP endpoints
     for i in 1..=3 {
-        let bus_tx = bus.clone();
+        let bus_tx = bus.sender();
         let bus_rx = bus.subscribe();
         let rt = routing_table.clone();
         let dd = dedup.clone();
@@ -191,7 +191,7 @@ async fn test_unknown_target_dropped() {
     let token = CancellationToken::new();
 
     // Only 1 endpoint
-    let bus_tx = bus.clone();
+    let bus_tx = bus.sender();
     let bus_rx = bus.subscribe();
     tokio::spawn({
         let rt = routing_table.clone();

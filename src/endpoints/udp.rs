@@ -17,6 +17,7 @@ use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use bytes::Bytes;
 use dashmap::DashMap;
+use async_broadcast::{Receiver, Sender, RecvError};
 use futures::future::join_all;
 use mavlink::MavlinkVersion;
 use parking_lot::RwLock;
@@ -25,7 +26,6 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
@@ -65,8 +65,8 @@ pub async fn run(
     id: usize,
     address: String,
     mode: crate::config::EndpointMode,
-    bus_tx: broadcast::Sender<RoutedMessage>,
-    bus_rx: broadcast::Receiver<RoutedMessage>,
+    bus_tx: Sender<RoutedMessage>,
+    bus_rx: Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
     dedup: ConcurrentDedup,
     filters: EndpointFilters,
@@ -181,10 +181,10 @@ pub async fn run(
                         }
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
+                Err(RecvError::Overflowed(n)) => {
                     warn!("UDP Sender lagged: missed {} messages", n);
                 }
-                Err(broadcast::error::RecvError::Closed) => break,
+                Err(RecvError::Closed) => break,
             }
         }
     };

@@ -17,9 +17,9 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace, warn};
+use async_broadcast::{Receiver, Sender, TryRecvError, RecvError};
 
 /// Exponential backoff helper for connection retries.
 #[derive(Debug)]
@@ -79,7 +79,7 @@ pub struct EndpointCore {
     /// Unique identifier for this endpoint.
     pub id: EndpointId,
     /// Sender half of the global message bus for publishing incoming messages.
-    pub bus_tx: broadcast::Sender<RoutedMessage>,
+    pub bus_tx: Sender<RoutedMessage>,
     /// Shared routing table for learning and querying MAVLink network topology.
     pub routing_table: Arc<RwLock<RoutingTable>>,
     /// Shared concurrent deduplication instance (sharded for multicore scalability).
@@ -135,31 +135,29 @@ impl EndpointCore {
         }
 
         // 4. Update routing table (skip for endpoints that don't need routing, e.g., TCP server clients)
-        // Optimized: Try non-blocking write first; if contended, use read-check-then-write pattern
         if self.update_routing {
             let now = Instant::now();
 
-            // Fast path: Try to get write lock without blocking
-            if let Some(mut rt) = self.routing_table.try_write() {
-                rt.update_if_needed(
+            // Cheap read first; only take write lock when an update is actually needed
+            let needs_update = {
+                let rt = self.routing_table.read();
+                rt.needs_update_for_endpoint(
                     self.id,
                     frame.header.system_id,
                     frame.header.component_id,
                     now,
-                );
-            } else {
-                // Slow path: Lock is contended, use read-check-then-write to avoid blocking readers
-                let needs_update = {
-                    let rt = self.routing_table.read();
-                    rt.needs_update_for_endpoint(
+                )
+            };
+
+            if needs_update {
+                if let Some(mut rt) = self.routing_table.try_write() {
+                    rt.update(
                         self.id,
                         frame.header.system_id,
                         frame.header.component_id,
                         now,
-                    )
-                };
-
-                if needs_update {
+                    );
+                } else {
                     let mut rt = self.routing_table.write();
                     rt.update(
                         self.id,
@@ -178,7 +176,7 @@ impl EndpointCore {
         let target = extract_target(&frame.message);
 
         // Send lightweight RoutedMessage (no Arc allocation - message_id cached)
-        if let Err(e) = self.bus_tx.send(RoutedMessage {
+        if let Err(e) = self.bus_tx.try_broadcast(RoutedMessage {
             source_id: self.id,
             header: frame.header,
             message_id,
@@ -187,7 +185,7 @@ impl EndpointCore {
             serialized_bytes,
             target,
         }) {
-            warn!("Bus send error: {}", e);
+            warn!("Bus send error: {:?}", e);
         }
     }
 
@@ -276,7 +274,7 @@ impl EndpointCore {
 pub async fn run_stream_loop<R, W>(
     mut reader: R,
     writer: W,
-    mut bus_rx: broadcast::Receiver<RoutedMessage>,
+    mut bus_rx: Receiver<RoutedMessage>,
     core: EndpointCore,
     cancel_token: CancellationToken,
     name: String,
@@ -337,16 +335,9 @@ where
                                 break;
                             }
 
-                            // Optimistic batching - larger batches for higher queue depths
-                            let queue_depth = bus_rx.len();
-                            let batch_size = match queue_depth {
-                                0..=10 => 5,
-                                11..=100 => 20,
-                                101..=500 => 50,
-                                501..=1000 => 200,
-                                _ => 500,
-                            };
-                            for _ in 0..batch_size {
+                            // Optimistic batching - process a fixed batch to reduce wakeups
+                            const BATCH_SIZE: usize = 512;
+                            for _ in 0..BATCH_SIZE {
                                 match bus_rx.try_recv() {
                                     Ok(m) => {
                                         if core.check_outgoing(&m) {
@@ -356,23 +347,24 @@ where
                                             }
                                         }
                                     }
-                                    Err(broadcast::error::TryRecvError::Empty) => break,
-                                    Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                                    Err(TryRecvError::Empty) => break,
+                                    Err(TryRecvError::Overflowed(n)) => {
                                         warn!("{} Sender lagged: missed {} messages", name, n);
                                     }
-                                    Err(broadcast::error::TryRecvError::Closed) => return,
+                                    Err(TryRecvError::Closed) => return,
                                 }
                             }
 
+                            // Only flush when the queue is drained to avoid extra syscalls under load
                             if let Err(e) = writer.flush().await {
                                 debug!("{} flush error: {}", name, e);
                                 break;
                             }
                         }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                        Err(RecvError::Overflowed(n)) => {
                             warn!("{} Sender lagged: missed {} messages", name, n);
                         }
-                        Err(broadcast::error::RecvError::Closed) => break,
+                        Err(RecvError::Closed) => break,
                     }
                 }
             }

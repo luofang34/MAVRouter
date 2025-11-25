@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
     let token = tokio_util::sync::CancellationToken::new();
 
     // Start UDP endpoint (GCS)
-    let bus_tx = bus.clone();
+    let bus_tx = bus.sender();
     let bus_rx = bus.subscribe();
     let rt = routing_table.clone();
     let dd = dedup.clone();

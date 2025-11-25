@@ -329,7 +329,7 @@ async fn main() -> Result<()> {
         // Implicit TCP Server
         if let Some(port) = config.general.tcp_port {
             let name = format!("Implicit TCP Server :{}", port);
-            let bus_tx = bus.clone();
+            let bus_tx = bus.sender();
             let bus_rx = bus.subscribe();
             let rt = routing_table.clone();
             let dd = dedup.clone();
@@ -343,7 +343,7 @@ async fn main() -> Result<()> {
                 task_token.clone(),
                 move || {
                     let bus_tx = bus_tx.clone();
-                    let bus_rx = bus_rx.resubscribe();
+                    let bus_rx = bus_rx.clone();
                     let rt = rt.clone();
                     let dd = dd.clone();
                     let filters = filters.clone();
@@ -372,7 +372,7 @@ async fn main() -> Result<()> {
                     name,
                     task_token.clone(),
                     move || {
-                        let bus_rx = bus_rx.resubscribe();
+                        let bus_rx = bus_rx.clone();
                         let dir = dir.clone();
                         let token = task_token.clone();
                         async move { crate::endpoints::tlog::run(dir, bus_rx, token).await }
@@ -383,7 +383,7 @@ async fn main() -> Result<()> {
 
         for (i, endpoint_config) in config.endpoint.iter().enumerate() {
             let bus = bus.clone();
-            let bus_tx = bus.clone();
+            let bus_tx = bus.sender();
             let routing_table = routing_table.clone();
             let dedup = dedup.clone();
             let task_token = cancel_token.child_token();

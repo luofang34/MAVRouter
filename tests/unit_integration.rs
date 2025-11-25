@@ -21,7 +21,7 @@ async fn test_stream_loopback() {
     let filters = EndpointFilters::default();
     let token = CancellationToken::new();
 
-    let bus_tx = bus.clone();
+    let bus_tx = bus.sender();
     let bus_rx = bus.subscribe();
 
     let core = EndpointCore {
@@ -82,7 +82,7 @@ async fn test_stream_loopback() {
             component_id: 0,
         },
     };
-    bus.send(msg_out).unwrap();
+    bus.tx.broadcast(msg_out).await.unwrap();
 
     let mut client_rx_buf = [0u8; 1024];
     let n = client.read(&mut client_rx_buf).await.unwrap();

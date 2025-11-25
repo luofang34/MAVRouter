@@ -19,10 +19,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+use async_broadcast::{Receiver, Sender};
 
 /// Runs the TCP endpoint logic, continuously handling connections based on the specified mode.
 ///
@@ -58,8 +58,8 @@ pub async fn run(
     id: usize,
     address: String,
     mode: crate::config::EndpointMode,
-    bus_tx: broadcast::Sender<RoutedMessage>,
-    bus_rx: broadcast::Receiver<RoutedMessage>,
+    bus_tx: Sender<RoutedMessage>,
+    bus_rx: Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
     dedup: ConcurrentDedup,
     filters: EndpointFilters,
@@ -107,7 +107,7 @@ pub async fn run(
                                     filters: core.filters.clone(),
                                     update_routing: true, // Required for targeted message routing
                                 };
-                                let rx_client = bus_rx.resubscribe();
+                                let rx_client = bus_rx.clone();
                                 let token_client = token.clone();
 
                                 join_set.spawn(async move {
@@ -146,7 +146,7 @@ pub async fn run(
                         let _ = run_stream_loop(
                             read,
                             write,
-                            bus_rx.resubscribe(),
+                            bus_rx.clone(),
                             core.clone(),
                             token.clone(),
                             name,

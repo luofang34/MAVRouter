@@ -28,7 +28,7 @@ async fn test_udp_echo() {
     let filters = EndpointFilters::default();
     let token = CancellationToken::new();
 
-    let bus_tx = bus.clone();
+    let bus_tx = bus.sender();
     let bus_rx = bus.subscribe();
     let rt = routing_table.clone();
     let dd = dedup.clone();
@@ -69,7 +69,7 @@ async fn test_udp_echo() {
     socket.send(&buf).await.unwrap();
 
     // Setup TCP listener (Endpoint 2)
-    let bus_tx2 = bus.clone();
+    let bus_tx2 = bus.sender();
     let bus_rx2 = bus.subscribe();
     let rt2 = routing_table.clone();
     let dd2 = dedup.clone();
@@ -120,7 +120,7 @@ async fn test_tcp_bidirectional() {
     let token = CancellationToken::new();
 
     // Start TCP Server 1 (ID 1)
-    let bus_tx = bus.clone();
+    let bus_tx = bus.sender();
     let bus_rx = bus.subscribe();
     let rt = routing_table.clone();
     let dd = dedup.clone();
@@ -144,7 +144,7 @@ async fn test_tcp_bidirectional() {
     });
 
     // Start TCP Server 2 (ID 2)
-    let bus_tx2 = bus.clone();
+    let bus_tx2 = bus.sender();
     let bus_rx2 = bus.subscribe();
     let rt2 = routing_table.clone();
     let dd2 = dedup.clone();

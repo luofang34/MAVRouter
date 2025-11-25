@@ -1,7 +1,7 @@
+use async_broadcast::{Receiver, Sender};
 use bytes::Bytes;
 use mavlink::{MavHeader, MavlinkVersion};
 use std::fmt;
-use tokio::sync::broadcast;
 
 use crate::mavlink_utils::MessageTarget;
 
@@ -38,15 +38,31 @@ pub struct RoutedMessage {
     pub target: MessageTarget,
 }
 
-/// Type alias for the message bus sender.
-///
-/// This is a Tokio `broadcast::Sender` used to distribute `RoutedMessage`s
+/// Message bus handle used to distribute `RoutedMessage`s
 /// to all active endpoints and internal router components.
-pub type MessageBus = broadcast::Sender<RoutedMessage>;
+#[derive(Clone)]
+pub struct MessageBus {
+    /// Sender half of the bus.
+    pub tx: Sender<RoutedMessage>,
+    /// Template receiver that can be cloned for subscribers.
+    pub rx: Receiver<RoutedMessage>,
+}
+
+impl MessageBus {
+    /// Create a new subscriber to the bus.
+    pub fn subscribe(&self) -> Receiver<RoutedMessage> {
+        self.rx.clone()
+    }
+
+    /// Clone the sender half of the bus.
+    pub fn sender(&self) -> Sender<RoutedMessage> {
+        self.tx.clone()
+    }
+}
 
 /// Creates a new message bus with the specified capacity.
 ///
-/// The message bus is a Tokio `broadcast` channel, which allows multiple
+/// The message bus is an `async_broadcast` channel, which allows multiple
 /// receivers to subscribe and receive copies of messages sent through it.
 ///
 /// # Arguments
@@ -57,7 +73,7 @@ pub type MessageBus = broadcast::Sender<RoutedMessage>;
 ///
 /// # Returns
 ///
-/// A `MessageBus` (Tokio `broadcast::Sender`) instance.
+/// A `MessageBus` instance containing both sender and template receiver.
 ///
 /// # Example
 ///
@@ -68,8 +84,10 @@ pub type MessageBus = broadcast::Sender<RoutedMessage>;
 /// // Endpoints can now subscribe to this bus
 /// ```
 pub fn create_bus(capacity: usize) -> MessageBus {
-    let (tx, _) = broadcast::channel(capacity);
-    tx
+    let (mut tx, rx) = async_broadcast::broadcast(capacity);
+    // Match tokio broadcast semantics: drop oldest messages when lagging
+    tx.set_overflow(true);
+    MessageBus { tx, rx }
 }
 
 #[cfg(test)]
@@ -95,7 +113,10 @@ mod tests {
             },
         };
 
-        bus.send(msg.clone()).expect("Failed to send test message");
+        bus.tx
+            .broadcast(msg.clone())
+            .await
+            .expect("Failed to send test message");
 
         let received = rx.recv().await.expect("Failed to receive test message");
         assert_eq!(received.source_id, EndpointId(1));
