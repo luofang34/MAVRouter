@@ -187,23 +187,26 @@ async fn main() -> Result<()> {
         let dedup_period = config.general.dedup_period_ms.unwrap_or(0);
         let dedup = Arc::new(Mutex::new(Dedup::new(Duration::from_millis(dedup_period))));
 
-        let dedup_rotator = dedup.clone();
+        // Only spawn dedup rotator if dedup is enabled (rotation_interval > 0)
         let dedup_rotation_interval = dedup.lock().rotation_interval();
-        let dedup_token = cancel_token.child_token(); // Clone from main cancel_token
-        handles.push(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(dedup_rotation_interval);
-            loop {
-                tokio::select! {
-                    _ = dedup_token.cancelled() => {
-                        info!("Dedup Rotator shutting down.");
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        dedup_rotator.lock().rotate_bucket();
+        if !dedup_rotation_interval.is_zero() {
+            let dedup_rotator = dedup.clone();
+            let dedup_token = cancel_token.child_token();
+            handles.push(tokio::spawn(async move {
+                let mut interval = tokio::time::interval(dedup_rotation_interval);
+                loop {
+                    tokio::select! {
+                        _ = dedup_token.cancelled() => {
+                            info!("Dedup Rotator shutting down.");
+                            break;
+                        }
+                        _ = interval.tick() => {
+                            dedup_rotator.lock().rotate_bucket();
+                        }
                     }
                 }
-            }
-        }));
+            }));
+        }
 
         // Pruning Task
         let rt_prune = routing_table.clone();
