@@ -1,6 +1,6 @@
 [package]
 name = "mavrouter"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 authors = ["Fang Luo <luofang@luofang.org>"]
 description = "MAVLink router"
