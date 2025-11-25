@@ -87,6 +87,11 @@ run_test "Parameter Operations (Read/Write)" "tests/integration/verify_params.py
 run_test "Multi-Client Support (TCP Broadcast)" "tests/integration/verify_multiclient.py" 30 false
 run_test "Serial Load (Saturation)" "tests/integration/loop_stress_test.py --profile serial" 30 false
 
+echo "=== Tier 3: Resilience & Chaos (Allowed to Fail) ==="
+# Chaos and Fuzz tests are allowed to fail or timeout without breaking the build
+run_test "Fuzzing (Malicious Payload)" "tests/integration/fuzz_test.py" 60 true
+run_test "Chaos (Slow Loris, FD Exhaustion)" "tests/integration/chaos_test.py" 120 true
+
 echo "--------------------------------------------------"
 echo "Restarting Router for Stress Tests (No Hardware)..."
 pkill -f "target/release/mavrouter-rs" || true
@@ -95,13 +100,9 @@ RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_stress.tom
 # Allow startup time
 sleep 2
 
+echo "=== Router Stress Tests (No Hardware) ==="
 run_test "Ping Storm (Burst Throughput)" "tests/integration/stress_test.py" 60 false
 run_test "Incremental Load Loop (Throughput & Memory)" "tests/integration/loop_stress_test.py" 90 false
-
-echo "=== Tier 3: Resilience & Chaos (Allowed to Fail) ==="
-# Chaos and Fuzz tests are allowed to fail or timeout without breaking the build
-run_test "Fuzzing (Malicious Payload)" "tests/integration/fuzz_test.py" 60 true
-run_test "Chaos (Slow Loris, FD Exhaustion)" "tests/integration/chaos_test.py" 120 true
 
 echo "========================================"
 echo "✅ All Critical Hardware Tests Passed."
