@@ -6,7 +6,7 @@ use mavrouter_rs::dedup::Dedup;
 use mavrouter_rs::router::EndpointId;
 use mavrouter_rs::routing::RoutingTable;
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // Helper to determine stress test iterations based on environment
 #[allow(clippy::expect_used)]
@@ -37,7 +37,7 @@ fn test_routing_table_stress_functional() {
     for endpoint in 0..10 {
         for sys in 1..=100 {
             for comp in 1..=10 {
-                rt.update(EndpointId(endpoint), sys, comp);
+                rt.update(EndpointId(endpoint), sys, comp, Instant::now());
             }
         }
     }
@@ -106,7 +106,7 @@ async fn test_routing_table_concurrent_access() {
         handles.push(tokio::spawn(async move {
             for j in 0..100 {
                 let mut rt_lock = rt_clone.write();
-                rt_lock.update(EndpointId(i), (j % 255) as u8, 1);
+                rt_lock.update(EndpointId(i), (j % 255) as u8, 1, Instant::now());
             }
         }));
     }

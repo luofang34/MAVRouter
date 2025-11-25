@@ -69,6 +69,7 @@ pub async fn run(
     dedup: Arc<Mutex<Dedup>>,
     filters: EndpointFilters,
     token: CancellationToken,
+    cleanup_ttl_secs: u64,
 ) -> Result<()> {
     let core = EndpointCore {
         id: EndpointId(id),
@@ -198,7 +199,7 @@ pub async fn run(
         loop {
             interval.tick().await;
             let now = Instant::now();
-            let ttl = Duration::from_secs(300);
+            let ttl = Duration::from_secs(cleanup_ttl_secs);
             let mut guard = clients_cleanup.lock();
             let initial_len = guard.len();
             guard.retain(|_, last_seen| now.duration_since(*last_seen) < ttl);

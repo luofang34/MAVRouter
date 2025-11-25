@@ -331,6 +331,7 @@ async fn main() -> Result<()> {
                 let addr = address.clone();
                 let m = mode.clone();
                 let f = filters.clone();
+                let cleanup_ttl = prune_ttl; // Capture prune_ttl here
 
                 handles.push(tokio::spawn(supervise(
                     name,
@@ -345,7 +346,7 @@ async fn main() -> Result<()> {
                         let m = m.clone();
                         let token = task_token.clone();
                         async move {
-                            crate::endpoints::udp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token)
+                            crate::endpoints::udp::run(i, addr, m, bus_tx, bus_rx, rt, dd, f, token, cleanup_ttl)
                                 .await
                         }
                     },

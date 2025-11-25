@@ -15,7 +15,7 @@ use anyhow::Result;
 use mavlink::{MavlinkVersion, Message};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -120,8 +120,14 @@ impl EndpointCore {
                 .check_incoming(&frame.header, frame.message.message_id())
         {
             {
+                let now = Instant::now();
                 let mut rt = self.routing_table.write();
-                rt.update(self.id, frame.header.system_id, frame.header.component_id);
+                rt.update(
+                    self.id,
+                    frame.header.system_id,
+                    frame.header.component_id,
+                    now,
+                );
             }
 
             let timestamp_us = SystemTime::now()

@@ -4,7 +4,7 @@ use mavlink::common::*;
 use mavrouter_rs::mavlink_utils::extract_target;
 use mavrouter_rs::router::EndpointId;
 use mavrouter_rs::routing::RoutingTable;
-use std::time::Duration; // Explicit import
+use std::time::{Duration, Instant}; // Explicit import
 
 fn benchmark_routing_table_lookup(c: &mut Criterion) {
     let mut rt = RoutingTable::new();
@@ -12,7 +12,7 @@ fn benchmark_routing_table_lookup(c: &mut Criterion) {
     // Populate with realistic data: 10 systems, 5 components each
     for sys in 1..=10 {
         for comp in 1..=5 {
-            rt.update(EndpointId(sys as usize), sys, comp);
+            rt.update(EndpointId(sys as usize), sys, comp, Instant::now());
         }
     }
 
@@ -61,7 +61,7 @@ fn benchmark_routing_table_update(c: &mut Criterion) {
         let mut counter = 0u8;
         b.iter(|| {
             counter = counter.wrapping_add(1);
-            rt.update(EndpointId(1), counter, 1);
+            rt.update(EndpointId(1), counter, 1, Instant::now());
         })
     });
 }
@@ -72,7 +72,7 @@ fn benchmark_routing_table_prune(c: &mut Criterion) {
     for size in [10, 100, 1000].iter() {
         let mut rt = RoutingTable::new();
         for i in 0..*size {
-            rt.update(EndpointId(1), (i % 255) as u8, 1);
+            rt.update(EndpointId(1), (i % 255) as u8, 1, Instant::now());
         }
 
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, _| {

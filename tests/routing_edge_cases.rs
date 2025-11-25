@@ -5,7 +5,7 @@ use mavrouter_rs::routing::RoutingTable;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[test]
 fn test_concurrent_routing_updates_high_load() {
@@ -20,7 +20,7 @@ fn test_concurrent_routing_updates_high_load() {
                 let sys = ((j % 50) + 1) as u8;
                 let comp = ((j % 20) + 1) as u8;
                 let mut lock = rt_clone.write();
-                lock.update(EndpointId(i), sys, comp);
+                lock.update(EndpointId(i), sys, comp, Instant::now());
                 // Simulate varying workloads
                 if j % 100 == 0 {
                     drop(lock);
