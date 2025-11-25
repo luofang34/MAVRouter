@@ -15,6 +15,7 @@ use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use parking_lot::{Mutex, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
@@ -81,14 +82,29 @@ pub async fn run(
 
             let mut join_set = JoinSet::new();
 
+            // Counter for generating unique endpoint IDs for each client connection
+            // Start at base_id * 1000 to avoid collisions with configured endpoints
+            let client_id_counter = Arc::new(AtomicUsize::new(id * 1000));
+
             loop {
                 tokio::select! {
                     accept_res = listener.accept() => {
                         match accept_res {
                             Ok((stream, addr)) => {
                                 let _ = stream.set_nodelay(true);
-                                info!("Accepted TCP connection from {}", addr);
-                                let core_client = core.clone();
+
+                                // Generate unique endpoint ID for this client connection
+                                let client_id = client_id_counter.fetch_add(1, Ordering::Relaxed);
+                                info!("Accepted TCP connection from {} (EndpointId: {})", addr, client_id);
+
+                                // Create a unique core for this client with its own EndpointId
+                                let core_client = EndpointCore {
+                                    id: EndpointId(client_id),
+                                    bus_tx: core.bus_tx.clone(),
+                                    routing_table: core.routing_table.clone(),
+                                    dedup: core.dedup.clone(),
+                                    filters: core.filters.clone(),
+                                };
                                 let rx_client = bus_rx.resubscribe();
                                 let token_client = token.clone();
 
