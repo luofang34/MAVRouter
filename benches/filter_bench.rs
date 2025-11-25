@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use mavlink::MavHeader;
-use mavrouter_rs::filter::EndpointFilters;
+use mavrouter::filter::EndpointFilters;
 
 fn bench_filter_hashset_100_entries(c: &mut Criterion) {
     let mut filters = EndpointFilters::default();

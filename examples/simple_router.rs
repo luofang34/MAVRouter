@@ -6,7 +6,7 @@
 //!
 //! Run with: cargo run --example simple_router
 
-use mavrouter_rs::*;
+use mavrouter::*;
 use std::time::Duration;
 
 #[tokio::main]

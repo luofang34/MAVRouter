@@ -2,9 +2,9 @@
 
 //! Stress and reliability tests
 
-use mavrouter_rs::dedup::Dedup;
-use mavrouter_rs::router::EndpointId;
-use mavrouter_rs::routing::RoutingTable;
+use mavrouter::dedup::Dedup;
+use mavrouter::router::EndpointId;
+use mavrouter::routing::RoutingTable;
 use std::env;
 use std::time::{Duration, Instant};
 

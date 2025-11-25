@@ -2,8 +2,8 @@ use bytes::Bytes;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use mavlink::MavHeader;
 use mavlink::MavlinkVersion;
-use mavrouter_rs::mavlink_utils::MessageTarget;
-use mavrouter_rs::router::{EndpointId, RoutedMessage};
+use mavrouter::mavlink_utils::MessageTarget;
+use mavrouter::router::{EndpointId, RoutedMessage};
 
 fn bench_routed_message_clone(c: &mut Criterion) {
     let header = MavHeader::default();

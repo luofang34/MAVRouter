@@ -2,11 +2,11 @@
 
 use bytes::Bytes;
 use mavlink::{MavHeader, MavlinkVersion, Message};
-use mavrouter_rs::dedup::ConcurrentDedup;
-use mavrouter_rs::endpoint_core::{run_stream_loop, EndpointCore};
-use mavrouter_rs::filter::EndpointFilters;
-use mavrouter_rs::router::{create_bus, EndpointId, RoutedMessage};
-use mavrouter_rs::routing::RoutingTable;
+use mavrouter::dedup::ConcurrentDedup;
+use mavrouter::endpoint_core::{run_stream_loop, EndpointCore};
+use mavrouter::filter::EndpointFilters;
+use mavrouter::router::{create_bus, EndpointId, RoutedMessage};
+use mavrouter::routing::RoutingTable;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
@@ -77,7 +77,7 @@ async fn test_stream_loopback() {
         version: MavlinkVersion::V2,
         timestamp_us: 0,
         serialized_bytes: Bytes::from(buf_out),
-        target: mavrouter_rs::mavlink_utils::MessageTarget {
+        target: mavrouter::mavlink_utils::MessageTarget {
             system_id: 0,
             component_id: 0,
         },

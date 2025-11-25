@@ -1,5 +1,5 @@
 use mavlink::common::{MavMessage, CHANGE_OPERATOR_CONTROL_DATA};
-use mavrouter_rs::mavlink_utils::extract_target;
+use mavrouter::mavlink_utils::extract_target;
 
 #[test]
 fn test_change_operator_control_target() {

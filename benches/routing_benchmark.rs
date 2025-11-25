@@ -1,9 +1,9 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use mavlink::common::MavMessage;
 use mavlink::common::*;
-use mavrouter_rs::mavlink_utils::extract_target;
-use mavrouter_rs::router::EndpointId;
-use mavrouter_rs::routing::RoutingTable;
+use mavrouter::mavlink_utils::extract_target;
+use mavrouter::router::EndpointId;
+use mavrouter::routing::RoutingTable;
 use std::time::{Duration, Instant}; // Explicit import
 
 fn benchmark_routing_table_lookup(c: &mut Criterion) {

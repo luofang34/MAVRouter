@@ -1,12 +1,12 @@
 #![allow(clippy::unwrap_used)]
 
 use mavlink::MavHeader;
-use mavrouter_rs::config::EndpointMode;
-use mavrouter_rs::dedup::ConcurrentDedup;
-use mavrouter_rs::endpoints::{tcp, udp};
-use mavrouter_rs::filter::EndpointFilters;
-use mavrouter_rs::router::create_bus;
-use mavrouter_rs::routing::RoutingTable;
+use mavrouter::config::EndpointMode;
+use mavrouter::dedup::ConcurrentDedup;
+use mavrouter::endpoints::{tcp, udp};
+use mavrouter::filter::EndpointFilters;
+use mavrouter::router::create_bus;
+use mavrouter::routing::RoutingTable;
 use parking_lot::RwLock;
 use serial_test::serial;
 use std::sync::Arc;
