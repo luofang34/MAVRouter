@@ -136,7 +136,8 @@ jobs:
           cd tests/integration
           set -e
           echo "Running Python integration tests..."
-          for test in verify_udp.py stress_test.py verify_multiclient.py chaos_test.py fuzz_test.py loop_stress_test.py; do
+          # Note: fuzz_test.py and chaos_test.py require hardware and are only run in full_hw_validation.sh
+          for test in verify_udp.py stress_test.py verify_multiclient.py loop_stress_test.py; do
             echo "Running $test..."
             timeout 120 python3 "$test"
           done
