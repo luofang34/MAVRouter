@@ -3,6 +3,7 @@ import time
 import threading
 import os
 import multiprocessing
+import select
 
 # --- Dependency Check ---
 try:
@@ -56,45 +57,43 @@ def run_load_round(round_name, duration, num_clients, msg_rate_per_client):
     lock = threading.Lock()
     stop_event = threading.Event()
 
-    import select
-
-# ...
-
-def client_task(client_id):
-    try:
-        master = mavutil.mavlink_connection(f'tcp:{TARGET_IP}:{TARGET_PORT}')
-        # Wait for heartbeat efficiently (don't block forever)
-        master.wait_heartbeat(timeout=2)
-        
-        local_sent = 0
-        
-        while not stop_event.is_set():
-            # Drain incoming messages to prevent router buffer fill
-            while True:
-                # Check if data is available to read
-                r, _, _ = select.select([master.fd], [], [], 0)
-                if not r:
-                    break
-                # Parse message (non-blocking since data is available, mostly)
-                if master.recv_msg() is None:
-                    break
-
-            # Send Ping
-            master.mav.ping_send(
-                int(time.time() * 1000000),
-                local_sent,
-                0, 0
-            )
-            local_sent += 1
+    def client_task(client_id):
+        try:
+            master = mavutil.mavlink_connection(f'tcp:{TARGET_IP}:{TARGET_PORT}')
+            # Wait for heartbeat efficiently (don't block forever)
+            master.wait_heartbeat(timeout=2)
             
-            # Simple rate limiting
-            time.sleep(1.0 / msg_rate_per_client)
+            local_sent = 0
             
-        with lock:
-            total_sent[0] += local_sent
-        master.close()
-    except Exception as e:
-        pass
+            while not stop_event.is_set():
+                # Drain incoming messages to prevent router buffer fill
+                while True:
+                    # Check if data is available to read
+                    r, _, _ = select.select([master.fd], [], [], 0)
+                    if not r:
+                        break
+                    # Parse message (non-blocking since data is available, mostly)
+                    if master.recv_msg() is None:
+                        break
+
+                # Send Ping
+                master.mav.ping_send(
+                    int(time.time() * 1000000),
+                    local_sent,
+                    0, 0
+                )
+                local_sent += 1
+                
+                # Simple rate limiting
+                time.sleep(1.0 / msg_rate_per_client)
+                
+            with lock:
+                total_sent[0] += local_sent
+            master.close()
+        except Exception as e:
+            # Print exception for debugging purposes if a thread fails
+            print(f"Client {client_id} error: {e}", file=sys.stderr)
+            pass
 
     # Start clients
     start_time = time.time()
