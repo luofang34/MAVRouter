@@ -16,12 +16,23 @@ use std::collections::HashSet;
 /// you can specify `allow` lists (only messages matching these are passed)
 /// or `block` lists (messages matching these are dropped).
 ///
-/// If an `allow` list is specified and is not empty, only messages whose
-/// attribute is present in that list will pass.
-/// If a `block` list is specified, any message whose attribute is present
-/// in that list will be dropped.
+/// ## Filter Evaluation Order
 ///
-/// **Note:** Allow lists take precedence over block lists if both are used for the same criterion.
+/// For each criterion, filters are evaluated in this order:
+/// 1. **Allow check**: If allow list is non-empty and message is NOT in the list → reject
+/// 2. **Block check**: If message IS in block list → reject
+/// 3. Otherwise → pass
+///
+/// **Note:** Block lists take precedence over allow lists. This enables a "whitelist with
+/// exceptions" pattern: define a broad allow list, then use block to exclude specific items.
+///
+/// ## Example
+///
+/// ```toml
+/// # Allow common telemetry, but exclude high-frequency ATTITUDE messages
+/// allow_msg_id_out = [0, 1, 24, 30, 33]
+/// block_msg_id_out = [30]  # ATTITUDE blocked even though in allow list
+/// ```
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct EndpointFilters {
     /// List of MAVLink message IDs allowed for outgoing traffic.
