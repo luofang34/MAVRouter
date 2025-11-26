@@ -137,7 +137,8 @@ jobs:
           set -e
           echo "Running Python integration tests..."
           # Note: fuzz_test.py and chaos_test.py require hardware and are only run in full_hw_validation.sh
-          for test in verify_udp.py stress_test.py verify_multiclient.py loop_stress_test.py; do
+          # verify_sighup.py is Unix-only (skips itself on Windows)
+          for test in verify_udp.py stress_test.py verify_multiclient.py loop_stress_test.py verify_sighup.py; do
             echo "Running $test..."
             timeout 120 python3 "$test"
           done
