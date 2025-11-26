@@ -168,7 +168,7 @@ def main():
         t3, m3 = run_load_round("Round 3: Extreme Load", 10, 100, 200)
 
         threshold_r2 = 7000
-        threshold_r3 = 11500
+        threshold_r3 = 11000
         max_mem_growth = 50.0
 
     elif args.profile == 'serial':
