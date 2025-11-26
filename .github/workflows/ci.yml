@@ -127,7 +127,7 @@ jobs:
           mode = "server"
           EOF
           # Start router in background
-          ./target/release/mavrouter-rs --config ci_config.toml > router.log 2>&1 &
+          ./target/release/mavrouter --config ci_config.toml > router.log 2>&1 &
           echo $! > router.pid
           # Wait for router to start
           sleep 2

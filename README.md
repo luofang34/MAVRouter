@@ -1,12 +1,12 @@
-# mavrouter-rs
+# MAVRouter
 
-[![CI](https://github.com/luofang34/mavrouter-rs/workflows/CI/badge.svg)](https://github.com/luofang34/mavrouter-rs/actions)
-[![codecov](https://codecov.io/gh/luofang34/mavrouter-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/luofang34/mavrouter-rs)
+[![CI](https://github.com/luofang34/mavrouter/workflows/CI/badge.svg)](https://github.com/luofang34/mavrouter/actions)
+[![codecov](https://codecov.io/gh/luofang34/mavrouter/branch/main/graph/badge.svg)](https://codecov.io/gh/luofang34/mavrouter)
 [![crates.io](https://img.shields.io/crates/v/mavrouter.svg)](https://crates.io/crates/mavrouter)
 [![docs.rs](https://docs.rs/mavrouter/badge.svg)](https://docs.rs/mavrouter)
 [![License](https://img.shields.io/crates/l/mavrouter.svg)](LICENSE)
 
-A MAVLink router for embedded systems.
+A lightweight MAVLink router.
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ baud = 115200
 EOF
 
 # Run the router
-mavrouter-rs --config mavrouter.toml
+mavrouter --config mavrouter.toml
 ```
 
 ## Usage
@@ -62,5 +62,5 @@ mode = "server"
 
 ### Run
 ```bash
-./target/release/mavrouter-rs --config mavrouter.toml
+./target/release/mavrouter --config mavrouter.toml
 ```
