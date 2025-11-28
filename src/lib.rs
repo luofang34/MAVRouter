@@ -67,11 +67,11 @@
 
 /// Router configuration and parsing utilities.
 pub mod config;
-mod high_level;
 /// Core logic for generic endpoint operations.
 pub mod endpoint_core;
 /// Custom error types for structured error handling.
 pub mod error;
+mod high_level;
 /// Core message routing logic and types.
 pub mod router;
 /// Various MAVLink endpoint implementations (TCP, UDP, Serial, TLOG).

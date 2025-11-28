@@ -157,8 +157,10 @@ impl Router {
                     let m = crate::config::EndpointMode::Server;
                     let token = task_token.clone();
                     async move {
-                        crate::endpoints::tcp::run(id, addr, m, bus_tx, bus_rx, rt, dd, filters, token)
-                            .await
+                        crate::endpoints::tcp::run(
+                            id, addr, m, bus_tx, bus_rx, rt, dd, filters, token,
+                        )
+                        .await
                     }
                 },
             )));
@@ -433,6 +435,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
