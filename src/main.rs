@@ -144,6 +144,38 @@ impl ReloadSignal {
     }
 }
 
+/// Helper struct to handle SIGTERM on Unix and do nothing on Windows
+struct TerminateSignal {
+    #[cfg(unix)]
+    inner: Signal,
+}
+
+impl TerminateSignal {
+    fn new() -> Result<Self> {
+        #[cfg(unix)]
+        {
+            Ok(Self {
+                inner: signal(SignalKind::terminate())?,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {})
+        }
+    }
+
+    async fn recv(&mut self) -> Option<()> {
+        #[cfg(unix)]
+        {
+            self.inner.recv().await
+        }
+        #[cfg(not(unix))]
+        {
+            std::future::pending().await
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -170,7 +202,7 @@ async fn main() -> Result<()> {
     let mut sig_hup = ReloadSignal::new()?;
 
     // Initialize SIGTERM handler for graceful shutdown
-    let mut sig_term = signal(SignalKind::terminate())?;
+    let mut sig_term = TerminateSignal::new()?;
 
     loop {
         let config = match Config::load(&args.config).await {
