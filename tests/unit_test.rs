@@ -286,10 +286,11 @@ fn test_filter_empty_allows_all() {
 /// Test block overrides allow
 #[test]
 fn test_filter_block_overrides_allow() {
-    let mut filters = EndpointFilters::default();
-
-    filters.allow_msg_id_in = HashSet::from([0, 1]);
-    filters.block_msg_id_in = HashSet::from([0]);
+    let filters = EndpointFilters {
+        allow_msg_id_in: HashSet::from([0, 1]),
+        block_msg_id_in: HashSet::from([0]),
+        ..Default::default()
+    };
 
     let header = MavHeader::default();
 
@@ -306,8 +307,10 @@ fn test_filter_block_overrides_allow() {
 /// Test allow list alone
 #[test]
 fn test_filter_allow_list_only() {
-    let mut filters = EndpointFilters::default();
-    filters.allow_msg_id_out = HashSet::from([0, 1, 30]);
+    let filters = EndpointFilters {
+        allow_msg_id_out: HashSet::from([0, 1, 30]),
+        ..Default::default()
+    };
 
     let header = MavHeader::default();
 
@@ -322,8 +325,10 @@ fn test_filter_allow_list_only() {
 /// Test block list alone
 #[test]
 fn test_filter_block_list_only() {
-    let mut filters = EndpointFilters::default();
-    filters.block_msg_id_out = HashSet::from([30, 31, 32]);
+    let filters = EndpointFilters {
+        block_msg_id_out: HashSet::from([30, 31, 32]),
+        ..Default::default()
+    };
 
     let header = MavHeader::default();
 
@@ -339,8 +344,10 @@ fn test_filter_block_list_only() {
 /// Test component filter
 #[test]
 fn test_filter_component() {
-    let mut filters = EndpointFilters::default();
-    filters.allow_src_comp_in = HashSet::from([1, 190]); // Autopilot, GCS
+    let filters = EndpointFilters {
+        allow_src_comp_in: HashSet::from([1, 190]), // Autopilot, GCS
+        ..Default::default()
+    };
 
     let header_autopilot = MavHeader {
         system_id: 1,
@@ -368,8 +375,10 @@ fn test_filter_component() {
 /// Test system filter
 #[test]
 fn test_filter_system() {
-    let mut filters = EndpointFilters::default();
-    filters.block_src_sys_in = HashSet::from([100, 200]); // Block specific systems
+    let filters = EndpointFilters {
+        block_src_sys_in: HashSet::from([100, 200]), // Block specific systems
+        ..Default::default()
+    };
 
     let header_ok = MavHeader {
         system_id: 1,
@@ -397,12 +406,13 @@ fn test_filter_system() {
 /// Test combined filters (multi-criteria)
 #[test]
 fn test_filter_combined() {
-    let mut filters = EndpointFilters::default();
-
-    // Allow only HEARTBEAT and ATTITUDE
-    filters.allow_msg_id_in = HashSet::from([0, 30]);
-    // Block system 100
-    filters.block_src_sys_in = HashSet::from([100]);
+    let filters = EndpointFilters {
+        // Allow only HEARTBEAT and ATTITUDE
+        allow_msg_id_in: HashSet::from([0, 30]),
+        // Block system 100
+        block_src_sys_in: HashSet::from([100]),
+        ..Default::default()
+    };
 
     let header_sys1 = MavHeader {
         system_id: 1,

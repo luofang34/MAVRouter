@@ -24,12 +24,15 @@ def main():
         print("Received heartbeat from system 0 (Broadcast?), waiting for specific system...")
         sys.exit(1)
 
-    print(f"Requesting parameters from SysID {target_system}...")
-    
+    # Use component 1 (MAV_COMP_ID_AUTOPILOT1) for param requests
+    # Some flight controllers don't respond to component 0 requests
+    request_component = 1 if target_component == 0 else target_component
+    print(f"Requesting parameters from SysID {target_system} CompID {request_component}...")
+
     # Send PARAM_REQUEST_LIST
     master.mav.param_request_list_send(
         target_system,
-        target_component
+        request_component
     )
 
     print("Waiting for PARAM_VALUE...")

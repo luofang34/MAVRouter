@@ -11,7 +11,7 @@ cargo build --release --quiet
 
 echo "Starting Router for Full Hardware Validation..."
 # Kill any existing instances
-pkill -f "target/release/mavrouter-rs" || true
+pkill -f "target/release/mavrouter" || true
 
 # Config check
 if [ ! -f "config/mavrouter_test.toml" ]; then
@@ -20,7 +20,7 @@ if [ ! -f "config/mavrouter_test.toml" ]; then
 fi
 
 # Start Router
-RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
+RUST_LOG=info ./target/release/mavrouter --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
 
 # Wait for router's TCP port to be open
 echo "Waiting for router TCP port 5760 to be available..."
@@ -42,7 +42,7 @@ done
 # Cleanup trap
 cleanup() {
     echo "Stopping Router (pkill)..."
-    pkill -f "target/release/mavrouter-rs" || true
+    pkill -f "target/release/mavrouter" || true
 }
 trap cleanup EXIT
 
@@ -84,9 +84,9 @@ run_test "UDP Broadcast (UDP <-> Serial)" "tests/integration/verify_udp.py" 30 f
 
 echo "--------------------------------------------------"
 echo "Restarting Router before Tier 2 to clear state..."
-pkill -f "target/release/mavrouter-rs" || true
+pkill -f "target/release/mavrouter" || true
 sleep 1
-RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
+RUST_LOG=info ./target/release/mavrouter --config config/mavrouter_test.toml > router_hw_val.log 2>&1 &
 # Wait for router's TCP port to be open again
 for i in $(seq 1 10); do
     if nc -z 127.0.0.1 5760; then
@@ -115,9 +115,9 @@ run_test "Chaos (Slow Loris, FD Exhaustion)" "tests/integration/chaos_test.py" 1
 
 echo "--------------------------------------------------"
 echo "Restarting Router for Stress Tests (No Hardware)..."
-pkill -f "target/release/mavrouter-rs" || true
+pkill -f "target/release/mavrouter" || true
 sleep 1
-RUST_LOG=info ./target/release/mavrouter-rs --config config/mavrouter_stress.toml > router_hw_val.log 2>&1 &
+RUST_LOG=info ./target/release/mavrouter --config config/mavrouter_stress.toml > router_hw_val.log 2>&1 &
 # Allow startup time
 sleep 2
 

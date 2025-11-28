@@ -237,14 +237,23 @@ impl EndpointCore {
         let rt = self.routing_table.read();
         let should_send = rt.should_send(self.id, target.system_id, target.component_id);
 
-        if !should_send && target.system_id != 0 {
-            // Don't log dropped broadcast as "no route"
-            trace!(
+        if !should_send {
+            debug!(
                 endpoint_id = %self.id,
+                source_id = %msg.source_id,
                 target_sys = target.system_id,
                 target_comp = target.component_id,
                 msg_id = msg.message_id,
-                "Routing decision: DROP (no route)"
+                "Routing decision: DROP (no route to target)"
+            );
+        } else {
+            debug!(
+                endpoint_id = %self.id,
+                source_id = %msg.source_id,
+                target_sys = target.system_id,
+                target_comp = target.component_id,
+                msg_id = msg.message_id,
+                "Routing decision: FORWARD"
             );
         }
 
