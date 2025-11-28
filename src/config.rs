@@ -2,6 +2,7 @@ use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use serde::Deserialize;
 use std::path::Path;
+use std::str::FromStr;
 use tokio::fs;
 
 /// Configuration for MAVLink router.
@@ -179,6 +180,47 @@ fn default_mode_client() -> EndpointMode {
 }
 
 impl Config {
+    /// Parses router configuration from a TOML string.
+    ///
+    /// This is useful for programmatically generating configurations without
+    /// needing to write temporary files.
+    ///
+    /// # Arguments
+    ///
+    /// * `toml` - A string containing valid TOML configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `RouterError` if the string cannot be parsed or validation fails.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mavrouter::config::Config;
+    /// use std::str::FromStr;
+    ///
+    /// let toml = r#"
+    /// [general]
+    /// bus_capacity = 1000
+    ///
+    /// [[endpoint]]
+    /// type = "udp"
+    /// address = "0.0.0.0:14550"
+    /// mode = "server"
+    /// "#;
+    ///
+    /// let config = Config::from_str(toml).expect("valid config");
+    /// assert_eq!(config.endpoint.len(), 1);
+    /// ```
+    pub fn parse(toml: &str) -> Result<Self> {
+        let config: Config = toml::from_str(toml)
+            .map_err(|e| RouterError::config(format!("Failed to parse config: {}", e)))?;
+
+        config.validate()?;
+
+        Ok(config)
+    }
+
     /// Loads the router configuration from a TOML file.
     ///
     /// # Arguments
@@ -195,12 +237,7 @@ impl Config {
             .await
             .map_err(|e| RouterError::filesystem(&path_str, e))?;
 
-        let config: Config = toml::from_str(&content)
-            .map_err(|e| RouterError::config(format!("Failed to parse config file: {}", e)))?;
-
-        config.validate()?;
-
-        Ok(config)
+        Self::parse(&content)
     }
 
     /// Validates the loaded configuration to check for common errors,
@@ -287,6 +324,33 @@ impl Config {
         }
 
         Ok(())
+    }
+}
+
+impl FromStr for Config {
+    type Err = RouterError;
+
+    /// Parses router configuration from a TOML string.
+    ///
+    /// This implements the standard `FromStr` trait, allowing the use of
+    /// `str.parse::<Config>()` or `Config::from_str(s)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mavrouter::config::Config;
+    /// use std::str::FromStr;
+    ///
+    /// let toml = r#"
+    /// [[endpoint]]
+    /// type = "udp"
+    /// address = "0.0.0.0:14550"
+    /// "#;
+    ///
+    /// let config: Config = toml.parse().expect("valid config");
+    /// ```
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Config::parse(s)
     }
 }
 
@@ -394,5 +458,50 @@ mod tests {
             ],
         };
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_from_str_valid() {
+        let toml = r#"
+[general]
+bus_capacity = 1000
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+"#;
+        let config = Config::from_str(toml).expect("should parse valid TOML");
+        assert_eq!(config.endpoint.len(), 1);
+        assert_eq!(config.general.bus_capacity, 1000);
+    }
+
+    #[test]
+    fn test_from_str_invalid_toml() {
+        let toml = "this is not valid toml {{{{";
+        assert!(Config::from_str(toml).is_err());
+    }
+
+    #[test]
+    fn test_from_str_empty() {
+        let toml = "";
+        // Empty config should be valid (all defaults)
+        let config = Config::from_str(toml).expect("empty config should use defaults");
+        assert!(config.endpoint.is_empty());
+        assert_eq!(config.general.bus_capacity, 5000); // default
+    }
+
+    #[test]
+    fn test_from_str_validation_error() {
+        let toml = r#"
+[general]
+bus_capacity = 5
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+"#;
+        // bus_capacity too small should fail validation
+        assert!(Config::from_str(toml).is_err());
     }
 }

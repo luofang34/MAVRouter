@@ -11,27 +11,55 @@
 //!
 //! ## Quick Start
 //!
-//! ```no_run
-//! use mavrouter::{config::Config, router};
+//! The simplest way to use mavrouter as a library is with the high-level [`Router`] API:
 //!
-//! # async fn example() -> anyhow::Result<()> {
-//! let config = Config::load("mavrouter.toml").await?;
-//! let bus = router::create_bus(1000);
-//! // Start endpoints...
+//! ```no_run
+//! use mavrouter::Router;
+//!
+//! # async fn example() -> Result<(), mavrouter::error::RouterError> {
+//! // Start from a TOML string
+//! let router = Router::from_str(r#"
+//!     [[endpoint]]
+//!     type = "udp"
+//!     address = "0.0.0.0:14550"
+//!     mode = "server"
+//! "#).await?;
+//!
+//! // Or from a configuration file
+//! // let router = Router::from_file("mavrouter.toml").await?;
+//!
+//! // Access the message bus to subscribe to messages
+//! let mut rx = router.bus().subscribe();
+//!
+//! // ... do your work ...
+//!
+//! // Gracefully shut down
+//! router.stop().await;
 //! # Ok(())
 //! # }
 //! ```
 //!
 //! ## Configuration
 //!
-//! See [`config::Config`] for TOML configuration structure.
+//! See [`config::Config`] for TOML configuration structure. You can also create
+//! configurations programmatically using [`config::Config::parse`] or the
+//! standard [`FromStr`](std::str::FromStr) trait.
+//!
+//! ## Re-exported Dependencies
+//!
+//! For convenience, commonly needed dependencies are re-exported:
+//!
+//! - [`CancellationToken`]: For graceful shutdown control
+//! - [`RwLock`]: Used by the routing table (from `parking_lot`)
 //!
 //! ## Architecture
 //!
-//! - [`router`]: Message bus and routing
+//! - [`Router`]: High-level API for starting and managing the router
+//! - [`router`]: Low-level message bus and routing primitives
 //! - [`routing`]: Intelligent routing table
 //! - [`endpoints`]: TCP/UDP/Serial endpoint implementations
 //! - [`filter`]: Per-endpoint message filtering
+//! - [`config`]: Configuration parsing and validation
 
 #![deny(unsafe_code)]
 #![deny(clippy::unwrap_used)]
@@ -39,6 +67,7 @@
 
 /// Router configuration and parsing utilities.
 pub mod config;
+mod high_level;
 /// Core logic for generic endpoint operations.
 pub mod endpoint_core;
 /// Custom error types for structured error handling.
@@ -68,3 +97,16 @@ pub mod mavlink_utils;
 pub mod routing;
 /// Statistics history tracking and aggregation.
 pub mod stats;
+
+// Re-export commonly needed dependencies for library users.
+// This allows users to avoid adding these as direct dependencies
+// and ensures version compatibility.
+
+/// Re-export of `tokio_util::sync::CancellationToken` for graceful shutdown control.
+pub use tokio_util::sync::CancellationToken;
+
+/// Re-export of `parking_lot::RwLock` used by the routing table.
+pub use parking_lot::RwLock;
+
+// Re-export the high-level Router API at crate root for convenience.
+pub use high_level::Router;
