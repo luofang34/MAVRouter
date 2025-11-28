@@ -10,12 +10,12 @@
 //! - Stats (statistics aggregation)
 //! - Config validation
 
+use mavlink::{common::MavMessage, MavHeader};
 use mavrouter::dedup::{ConcurrentDedup, Dedup};
 use mavrouter::filter::EndpointFilters;
 use mavrouter::framing::StreamParser;
-use mavrouter::stats::StatsHistory;
 use mavrouter::routing::RoutingStats;
-use mavlink::{MavHeader, common::MavMessage};
+use mavrouter::stats::StatsHistory;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::thread;
@@ -40,7 +40,11 @@ fn test_stream_parser_buffer_overflow() {
     }
 
     // Valid packet should still work
-    let header = MavHeader { system_id: 1, component_id: 1, sequence: 0 };
+    let header = MavHeader {
+        system_id: 1,
+        component_id: 1,
+        sequence: 0,
+    };
     let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
     let mut buf = Vec::new();
     mavlink::write_v2_msg(&mut buf, header, &msg).expect("write");
@@ -56,7 +60,11 @@ fn test_stream_parser_buffer_overflow() {
 fn test_stream_parser_malformed_recovery() {
     let mut parser = StreamParser::new();
 
-    let header = MavHeader { system_id: 1, component_id: 1, sequence: 0 };
+    let header = MavHeader {
+        system_id: 1,
+        component_id: 1,
+        sequence: 0,
+    };
     let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
 
     let mut valid_packet = Vec::new();
@@ -91,7 +99,7 @@ fn test_stream_parser_stx_in_header() {
     let mut parser = StreamParser::new();
 
     let header = MavHeader {
-        system_id: 0xFD, // STX V2
+        system_id: 0xFD,    // STX V2
         component_id: 0xFE, // STX V1
         sequence: 0,
     };
@@ -116,7 +124,11 @@ fn test_stream_parser_stx_in_header() {
 fn test_stream_parser_v1_v2_mixed() {
     let mut parser = StreamParser::new();
 
-    let header = MavHeader { system_id: 1, component_id: 1, sequence: 0 };
+    let header = MavHeader {
+        system_id: 1,
+        component_id: 1,
+        sequence: 0,
+    };
     let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
 
     let mut buf_v2 = Vec::new();
@@ -142,7 +154,10 @@ fn test_stream_parser_v1_v2_mixed() {
     let mut total = 0;
     while let Some(frame) = parser.parse_next() {
         total += 1;
-        println!("Parsed frame {}: version={:?}, sysid={}", total, frame.version, frame.header.system_id);
+        println!(
+            "Parsed frame {}: version={:?}, sysid={}",
+            total, frame.version, frame.header.system_id
+        );
         match frame.version {
             mavlink::MavlinkVersion::V1 => v1_count += 1,
             mavlink::MavlinkVersion::V2 => v2_count += 1,
@@ -156,7 +171,10 @@ fn test_stream_parser_v1_v2_mixed() {
     assert!(total >= 2, "Should parse at least 2 packets");
     assert!(v2_count >= 2, "Should parse at least 2 V2 packets");
     // V1 parsing is more fragile due to shorter header
-    println!("✓ StreamParser handles mixed V1/V2 packets (v2={}, v1={})", v2_count, v1_count);
+    println!(
+        "✓ StreamParser handles mixed V1/V2 packets (v2={}, v1={})",
+        v2_count, v1_count
+    );
 }
 
 // ============================================================================
@@ -221,9 +239,7 @@ fn test_concurrent_dedup_contention() {
         }));
     }
 
-    let total_duplicates: usize = handles.into_iter()
-        .map(|h| h.join().unwrap())
-        .sum();
+    let total_duplicates: usize = handles.into_iter().map(|h| h.join().unwrap()).sum();
 
     println!("Total duplicates detected: {}", total_duplicates);
     assert!(total_duplicates > 0);
@@ -254,7 +270,11 @@ fn test_dedup_different_data_same_length() {
 #[test]
 fn test_filter_empty_allows_all() {
     let filters = EndpointFilters::default();
-    let header = MavHeader { system_id: 100, component_id: 200, sequence: 0 };
+    let header = MavHeader {
+        system_id: 100,
+        component_id: 200,
+        sequence: 0,
+    };
 
     assert!(filters.check_incoming(&header, 0));
     assert!(filters.check_incoming(&header, 12345));
@@ -322,9 +342,21 @@ fn test_filter_component() {
     let mut filters = EndpointFilters::default();
     filters.allow_src_comp_in = HashSet::from([1, 190]); // Autopilot, GCS
 
-    let header_autopilot = MavHeader { system_id: 1, component_id: 1, sequence: 0 };
-    let header_gcs = MavHeader { system_id: 255, component_id: 190, sequence: 0 };
-    let header_camera = MavHeader { system_id: 1, component_id: 100, sequence: 0 };
+    let header_autopilot = MavHeader {
+        system_id: 1,
+        component_id: 1,
+        sequence: 0,
+    };
+    let header_gcs = MavHeader {
+        system_id: 255,
+        component_id: 190,
+        sequence: 0,
+    };
+    let header_camera = MavHeader {
+        system_id: 1,
+        component_id: 100,
+        sequence: 0,
+    };
 
     assert!(filters.check_incoming(&header_autopilot, 0));
     assert!(filters.check_incoming(&header_gcs, 0));
@@ -339,9 +371,21 @@ fn test_filter_system() {
     let mut filters = EndpointFilters::default();
     filters.block_src_sys_in = HashSet::from([100, 200]); // Block specific systems
 
-    let header_ok = MavHeader { system_id: 1, component_id: 1, sequence: 0 };
-    let header_blocked1 = MavHeader { system_id: 100, component_id: 1, sequence: 0 };
-    let header_blocked2 = MavHeader { system_id: 200, component_id: 1, sequence: 0 };
+    let header_ok = MavHeader {
+        system_id: 1,
+        component_id: 1,
+        sequence: 0,
+    };
+    let header_blocked1 = MavHeader {
+        system_id: 100,
+        component_id: 1,
+        sequence: 0,
+    };
+    let header_blocked2 = MavHeader {
+        system_id: 200,
+        component_id: 1,
+        sequence: 0,
+    };
 
     assert!(filters.check_incoming(&header_ok, 0));
     assert!(!filters.check_incoming(&header_blocked1, 0));
@@ -360,8 +404,16 @@ fn test_filter_combined() {
     // Block system 100
     filters.block_src_sys_in = HashSet::from([100]);
 
-    let header_sys1 = MavHeader { system_id: 1, component_id: 1, sequence: 0 };
-    let header_sys100 = MavHeader { system_id: 100, component_id: 1, sequence: 0 };
+    let header_sys1 = MavHeader {
+        system_id: 1,
+        component_id: 1,
+        sequence: 0,
+    };
+    let header_sys100 = MavHeader {
+        system_id: 100,
+        component_id: 1,
+        sequence: 0,
+    };
 
     // sys1, msg 0: passes both → OK
     assert!(filters.check_incoming(&header_sys1, 0));
@@ -429,14 +481,23 @@ fn test_stats_clock_adjustment() {
     let mut history = StatsHistory::new(100);
 
     history.push(RoutingStats {
-        total_systems: 1, total_routes: 10, total_endpoints: 1, timestamp: 100,
+        total_systems: 1,
+        total_routes: 10,
+        total_endpoints: 1,
+        timestamp: 100,
     });
     history.push(RoutingStats {
-        total_systems: 2, total_routes: 20, total_endpoints: 2, timestamp: 101,
+        total_systems: 2,
+        total_routes: 20,
+        total_endpoints: 2,
+        timestamp: 101,
     });
     // Clock jumps backward
     history.push(RoutingStats {
-        total_systems: 3, total_routes: 30, total_endpoints: 3, timestamp: 99,
+        total_systems: 3,
+        total_routes: 30,
+        total_endpoints: 3,
+        timestamp: 99,
     });
 
     // Should not panic
@@ -462,10 +523,10 @@ fn test_stats_empty_history() {
 /// Test message bus overflow handling
 #[tokio::test]
 async fn test_message_bus_overflow() {
-    use mavrouter::router::{create_bus, RoutedMessage, EndpointId};
-    use mavrouter::mavlink_utils::MessageTarget;
     use bytes::Bytes;
     use mavlink::MavlinkVersion;
+    use mavrouter::mavlink_utils::MessageTarget;
+    use mavrouter::router::{create_bus, EndpointId, RoutedMessage};
 
     let bus = create_bus(10);
     let tx = bus.sender();
@@ -474,12 +535,19 @@ async fn test_message_bus_overflow() {
     for i in 0..100 {
         let msg = RoutedMessage {
             source_id: EndpointId(0),
-            header: MavHeader { system_id: 1, component_id: 1, sequence: i as u8 },
+            header: MavHeader {
+                system_id: 1,
+                component_id: 1,
+                sequence: i as u8,
+            },
             message_id: 0,
             version: MavlinkVersion::V2,
             timestamp_us: 0,
             serialized_bytes: Bytes::from_static(b"test"),
-            target: MessageTarget { system_id: 0, component_id: 0 },
+            target: MessageTarget {
+                system_id: 0,
+                component_id: 0,
+            },
         };
         let _ = tx.try_broadcast(msg);
     }

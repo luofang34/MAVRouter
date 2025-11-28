@@ -169,6 +169,9 @@ async fn main() -> Result<()> {
     // Initialize reload signal handler
     let mut sig_hup = ReloadSignal::new()?;
 
+    // Initialize SIGTERM handler for graceful shutdown
+    let mut sig_term = signal(SignalKind::terminate())?;
+
     loop {
         let config = match Config::load(&args.config).await {
             Ok(c) => c,
@@ -492,6 +495,10 @@ async fn main() -> Result<()> {
                     info!("Ctrl+C received. Initiating graceful shutdown...");
                     break;
                 }
+                _ = sig_term.recv() => {
+                    info!("SIGTERM received. Initiating graceful shutdown...");
+                    break;
+                }
                 _ = sig_hup.recv() => {
                     info!("SIGHUP received. Checking configuration for reload...");
                     match Config::load(&args.config).await {
@@ -514,12 +521,13 @@ async fn main() -> Result<()> {
 
         cancel_token.cancel();
 
+        // Give tasks time to flush (e.g. tlog) and cleanup
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+
         if !reload {
             break;
         }
 
-        // Give tasks time to flush (e.g. tlog) and cleanup
-        tokio::time::sleep(Duration::from_secs(1)).await;
         info!("Restarting system...");
     }
 

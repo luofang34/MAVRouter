@@ -9,11 +9,14 @@ use crate::error::{Result, RouterError};
 use crate::router::RoutedMessage;
 use async_broadcast::{Receiver, RecvError};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, File};
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+
+/// Interval for periodic flushing of TLOG buffer
+const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Runs the TLOG logging endpoint, continuously saving MAVLink messages to a file.
 ///
@@ -64,6 +67,9 @@ pub async fn run(
         .await
         .map_err(|e| RouterError::filesystem(path.display().to_string(), e))?;
     let mut writer = tokio::io::BufWriter::new(file);
+    let mut flush_interval = tokio::time::interval(FLUSH_INTERVAL);
+    // Don't count the initial tick
+    flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         tokio::select! {
@@ -71,28 +77,36 @@ pub async fn run(
                 info!("TLog Logger: Shutdown signal received.");
                 break;
             }
+            _ = flush_interval.tick() => {
+                // Periodic flush to ensure data is written to disk
+                if let Err(e) = writer.flush().await {
+                    error!("TLog periodic flush error: {}", e);
+                    break;
+                }
+            }
             res = bus_rx.recv() => {
-                                    match res {
-                                        Ok(msg) => {
-                                            // Use timestamp from RoutedMessage
-                                            let timestamp_us = msg.timestamp_us;
-                                            let ts_bytes = timestamp_us.to_be_bytes();
+                match res {
+                    Ok(msg) => {
+                        // Use timestamp from RoutedMessage
+                        let timestamp_us = msg.timestamp_us;
+                        let ts_bytes = timestamp_us.to_be_bytes();
 
-                                            if let Err(e) = writer.write_all(&ts_bytes).await {
-                                                error!("TLog write error: {}", e);
-                                                break;
-                                            }
-                                            // Use pre-serialized bytes
-                                            if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
-                                                error!("TLog write error: {}", e);
-                                                break;
-                                            }
-                                        }
-                                        Err(RecvError::Overflowed(n)) => {
-                                            warn!("TLog Logger lagged: missed {} messages", n);
-                                        }
-                                        Err(RecvError::Closed) => break,
-                                    }            }
+                        if let Err(e) = writer.write_all(&ts_bytes).await {
+                            error!("TLog write error: {}", e);
+                            break;
+                        }
+                        // Use pre-serialized bytes
+                        if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
+                            error!("TLog write error: {}", e);
+                            break;
+                        }
+                    }
+                    Err(RecvError::Overflowed(n)) => {
+                        warn!("TLog Logger lagged: missed {} messages", n);
+                    }
+                    Err(RecvError::Closed) => break,
+                }
+            }
         }
     }
 

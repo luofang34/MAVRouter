@@ -360,7 +360,10 @@ fn test_endpoint_id_wrap_behavior() {
     }
 
     let stats = rt.stats();
-    assert_eq!(stats.total_endpoints, 10, "All wrapped IDs should be tracked");
+    assert_eq!(
+        stats.total_endpoints, 10,
+        "All wrapped IDs should be tracked"
+    );
 
     // Verify routing works for both pre-wrap and post-wrap IDs
     assert!(rt.should_send(ids[0], 1, 1));
