@@ -6,7 +6,7 @@
 //! responsible for processing MAVLink messages over asynchronous read/write streams.
 
 use crate::dedup::ConcurrentDedup;
-use crate::error::Result;
+use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::framing::{MavlinkFrame, StreamParser};
 use crate::mavlink_utils::extract_target;
@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, trace, warn};
 
 /// Exponential backoff helper for connection retries.
 #[derive(Debug)]
@@ -316,10 +316,10 @@ where
 
         loop {
             tokio::select! {
-                _ = cancel_token_for_reader_loop.cancelled() => break,
+                _ = cancel_token_for_reader_loop.cancelled() => return Ok(()),
                 read_res = reader.read(&mut buf) => {
                     match read_res {
-                        Ok(0) => break, // EOF
+                        Ok(0) => return Ok(()), // EOF
                         Ok(n) => {
                             parser.push(&buf[..n]);
                             while let Some(frame) = parser.parse_next() {
@@ -327,8 +327,7 @@ where
                             }
                         }
                         Err(e) => {
-                            error!("{} read error: {}", name_read, e);
-                            break;
+                            return Err(RouterError::network(&name_read, e));
                         }
                     }
                 }
@@ -341,7 +340,7 @@ where
 
         loop {
             tokio::select! {
-                _ = cancel_token_for_writer_loop.cancelled() => break,
+                _ = cancel_token_for_writer_loop.cancelled() => return Ok(()),
                 msg_res = bus_rx.recv() => {
                     match msg_res {
                         Ok(msg) => {
@@ -350,8 +349,7 @@ where
                             }
 
                             if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
-                                debug!("{} write error: {}", name, e);
-                                break;
+                                return Err(RouterError::network(&name, e));
                             }
 
                             // Optimistic batching - process a fixed batch to reduce wakeups
@@ -361,8 +359,7 @@ where
                                     Ok(m) => {
                                         if core.check_outgoing(&m) {
                                             if let Err(e) = writer.write_all(&m.serialized_bytes).await {
-                                                debug!("{} write error: {}", name, e);
-                                                return;
+                                                return Err(RouterError::network(&name, e));
                                             }
                                         }
                                     }
@@ -370,29 +367,29 @@ where
                                     Err(TryRecvError::Overflowed(n)) => {
                                         warn!("{} Sender lagged: missed {} messages", name, n);
                                     }
-                                    Err(TryRecvError::Closed) => return,
+                                    Err(TryRecvError::Closed) => return Ok(()),
                                 }
                             }
 
                             // Flush buffered writes; keep simple to avoid deadlocks in low traffic tests
                             if let Err(e) = writer.flush().await {
-                                debug!("{} flush error: {}", name, e);
-                                break;
+                                return Err(RouterError::network(&name, e));
                             }
                         }
                         Err(RecvError::Overflowed(n)) => {
                             warn!("{} Sender lagged: missed {} messages", name, n);
                         }
-                        Err(RecvError::Closed) => break,
+                        Err(RecvError::Closed) => return Ok(()),
                     }
                 }
             }
         }
     };
 
+    // Propagate errors from reader/writer loops (issue #3)
     tokio::select! {
-        _ = reader_loop => Ok(()),
-        _ = writer_loop => Ok(()),
+        result = reader_loop => result,
+        result = writer_loop => result,
         _ = cancel_token_for_final_select.cancelled() => Ok(()),
     }
 }

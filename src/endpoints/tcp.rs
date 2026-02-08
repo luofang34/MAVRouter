@@ -19,6 +19,13 @@ use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Global counter for TCP client endpoint IDs, starting high enough
+/// to avoid collision with configured endpoint IDs (issue #6).
+static NEXT_TCP_CLIENT_ID: AtomicUsize = AtomicUsize::new(10_000);
+
+/// Maximum number of concurrent TCP client connections per server (issue #23).
+const MAX_TCP_CLIENTS: usize = 100;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -83,19 +90,22 @@ pub async fn run(
 
             let mut join_set = JoinSet::new();
 
-            // Counter for generating unique endpoint IDs for each client connection
-            // Start at base_id * 1000 to avoid collisions with configured endpoints
-            let client_id_counter = Arc::new(AtomicUsize::new(id * 1000));
-
             loop {
                 tokio::select! {
                     accept_res = listener.accept() => {
                         match accept_res {
                             Ok((stream, addr)) => {
+                                // Enforce connection limit (issue #23)
+                                if join_set.len() >= MAX_TCP_CLIENTS {
+                                    warn!("TCP Server {}: Max client limit ({}) reached, rejecting {}", address, MAX_TCP_CLIENTS, addr);
+                                    drop(stream);
+                                    continue;
+                                }
+
                                 let _ = stream.set_nodelay(true);
 
-                                // Generate unique endpoint ID for this client connection
-                                let client_id = client_id_counter.fetch_add(1, Ordering::Relaxed);
+                                // Generate unique endpoint ID using global counter (issue #6)
+                                let client_id = NEXT_TCP_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
                                 info!("Accepted TCP connection from {} (EndpointId: {})", addr, client_id);
 
                                 // Create a unique core for this client with its own EndpointId

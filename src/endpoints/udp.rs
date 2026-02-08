@@ -18,7 +18,7 @@ use crate::routing::RoutingTable;
 use async_broadcast::{Receiver, RecvError, Sender};
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures::future::join_all;
+// futures::join_all removed - sequential sends avoid Vec allocation (issue #17)
 use mavlink::MavlinkVersion;
 use parking_lot::RwLock;
 use std::io::Cursor;
@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, trace, warn};
 
 /// Runs the UDP endpoint logic, continuously handling MAVLink traffic.
 ///
@@ -136,10 +136,14 @@ pub async fn run(
                             version,
                             raw_bytes,
                         });
+                    } else {
+                        trace!("UDP: Failed to parse MAVLink packet from {} ({} bytes)", addr, len);
                     }
                 }
                 Err(e) => {
                     error!("UDP recv error: {}", e);
+                    // Backoff to prevent tight error loop (issue #21)
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             }
         }
@@ -152,6 +156,9 @@ pub async fn run(
     let core_tx = core.clone();
 
     let send_loop = async move {
+        // Pre-allocated buffer for client addresses to avoid per-message allocation (issue #17)
+        let mut targets: Vec<SocketAddr> = Vec::new();
+
         loop {
             match bus_rx_loop.recv().await {
                 Ok(msg) => {
@@ -166,17 +173,13 @@ pub async fn run(
                             warn!("UDP send error to target: {}", e);
                         }
                     } else {
-                        let targets: Vec<SocketAddr> =
-                            clients_send.iter().map(|r| *r.key()).collect();
-                        let sends: Vec<_> = targets
-                            .iter()
-                            .map(|client| s_socket.send_to(&packet_data, *client))
-                            .collect();
+                        // Collect keys first (releases DashMap shard locks before await)
+                        targets.clear();
+                        targets.extend(clients_send.iter().map(|r| *r.key()));
 
-                        let results = join_all(sends).await;
-                        for (client, res) in targets.into_iter().zip(results) {
-                            if let Err(e) = res {
-                                warn!("UDP broadcast error to {}: {}", client, e);
+                        for target in &targets {
+                            if let Err(e) = s_socket.send_to(&packet_data, target).await {
+                                warn!("UDP broadcast error to {}: {}", target, e);
                             }
                         }
                     }

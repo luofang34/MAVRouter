@@ -14,10 +14,9 @@ use crate::routing::RoutingTable;
 use async_broadcast::{Receiver, Sender};
 use parking_lot::RwLock;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio_serial::SerialPortBuilderExt;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 /// Runs the serial endpoint logic, continuously attempting to open and
 /// communicate over the specified serial device.
@@ -70,33 +69,8 @@ pub async fn run(
         update_routing: true,
     };
 
-    loop {
-        match open_and_run(&device, baud, bus_rx.clone(), core.clone(), token.clone()).await {
-            Ok(_) => {
-                if token.is_cancelled() {
-                    info!("Serial port {} loop stopped (cancelled).", device);
-                    break;
-                }
-                warn!("Serial port {} loop ended cleanly, retrying...", device);
-            }
-            Err(e) => {
-                if token.is_cancelled() {
-                    break;
-                }
-                error!("Serial port {} error: {:#}. Retrying in 1s...", device, e);
-            }
-        }
-
-        if token.is_cancelled() {
-            break;
-        }
-
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(1)) => {},
-            _ = token.cancelled() => { break; }
-        }
-    }
-    Ok(())
+    // No inner retry loop - supervisor handles retries with exponential backoff (issue #26)
+    open_and_run(&device, baud, bus_rx, core, token).await
 }
 
 /// Opens the specified serial port and runs the stream processing loop.

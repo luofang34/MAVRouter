@@ -63,9 +63,11 @@ pub async fn run(
 
     info!("TLog Logger: Logging to {:?}", path);
 
+    let path_str = path.display().to_string();
+
     let file = File::create(&path)
         .await
-        .map_err(|e| RouterError::filesystem(path.display().to_string(), e))?;
+        .map_err(|e| RouterError::filesystem(&path_str, e))?;
     let mut writer = tokio::io::BufWriter::new(file);
     let mut flush_interval = tokio::time::interval(FLUSH_INTERVAL);
     // Don't count the initial tick
@@ -81,7 +83,7 @@ pub async fn run(
                 // Periodic flush to ensure data is written to disk
                 if let Err(e) = writer.flush().await {
                     error!("TLog periodic flush error: {}", e);
-                    break;
+                    return Err(RouterError::filesystem(&path_str, e));
                 }
             }
             res = bus_rx.recv() => {
@@ -93,12 +95,12 @@ pub async fn run(
 
                         if let Err(e) = writer.write_all(&ts_bytes).await {
                             error!("TLog write error: {}", e);
-                            break;
+                            return Err(RouterError::filesystem(&path_str, e));
                         }
                         // Use pre-serialized bytes
                         if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
                             error!("TLog write error: {}", e);
-                            break;
+                            return Err(RouterError::filesystem(&path_str, e));
                         }
                     }
                     Err(RecvError::Overflowed(n)) => {
