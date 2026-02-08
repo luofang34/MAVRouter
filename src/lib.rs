@@ -72,6 +72,7 @@ pub mod endpoint_core;
 /// Custom error types for structured error handling.
 pub mod error;
 mod high_level;
+mod orchestration;
 /// Core message routing logic and types.
 pub mod router;
 /// Various MAVLink endpoint implementations (TCP, UDP, Serial, TLOG).
