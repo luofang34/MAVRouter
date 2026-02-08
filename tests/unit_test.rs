@@ -16,7 +16,7 @@ use mavrouter::filter::EndpointFilters;
 use mavrouter::framing::StreamParser;
 use mavrouter::routing::RoutingStats;
 use mavrouter::stats::StatsHistory;
-use std::collections::HashSet;
+use ahash::AHashSet as HashSet;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -564,4 +564,338 @@ async fn test_message_bus_overflow() {
 
     // Should not panic
     println!("✓ Message bus overflow handled gracefully");
+}
+
+// ============================================================================
+// EndpointCore Tests
+// ============================================================================
+
+/// Helper: create a serialized MAVLink V2 frame (raw bytes) for a HEARTBEAT
+/// message with the given header fields and return both the MavlinkFrame
+/// and the raw Bytes.
+fn make_heartbeat_frame(
+    system_id: u8,
+    component_id: u8,
+    sequence: u8,
+) -> mavrouter::framing::MavlinkFrame {
+    use mavrouter::framing::StreamParser;
+
+    let header = MavHeader {
+        system_id,
+        component_id,
+        sequence,
+    };
+    let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
+    let mut buf = Vec::new();
+    mavlink::write_v2_msg(&mut buf, header, &msg).expect("write v2");
+
+    // Parse through StreamParser to get a proper MavlinkFrame with raw_bytes
+    let mut parser = StreamParser::new();
+    parser.push(&buf);
+    parser.parse_next().expect("should parse heartbeat frame")
+}
+
+/// Helper: build an EndpointCore with the given configuration
+fn make_endpoint_core(
+    id: usize,
+    bus_tx: async_broadcast::Sender<mavrouter::router::RoutedMessage>,
+    routing_table: std::sync::Arc<mavrouter::RwLock<mavrouter::routing::RoutingTable>>,
+    dedup_period: Duration,
+    filters: EndpointFilters,
+) -> mavrouter::endpoint_core::EndpointCore {
+    use mavrouter::dedup::ConcurrentDedup;
+    use mavrouter::router::EndpointId;
+
+    mavrouter::endpoint_core::EndpointCore {
+        id: EndpointId(id),
+        bus_tx,
+        routing_table,
+        dedup: ConcurrentDedup::new(dedup_period),
+        filters,
+        update_routing: true,
+    }
+}
+
+/// Test 1: handle_incoming_frame happy path - valid frame appears on bus
+#[tokio::test]
+async fn test_endpoint_core_handle_incoming_happy_path() {
+    use mavrouter::router::{create_bus, EndpointId};
+    use mavrouter::routing::RoutingTable;
+
+    let bus = create_bus(100);
+    let mut rx = bus.subscribe();
+    let routing_table = std::sync::Arc::new(mavrouter::RwLock::new(RoutingTable::new()));
+
+    let core = make_endpoint_core(
+        1,
+        bus.sender(),
+        routing_table,
+        Duration::ZERO, // dedup disabled
+        EndpointFilters::default(),
+    );
+
+    let frame = make_heartbeat_frame(1, 1, 0);
+
+    core.handle_incoming_frame(frame);
+
+    // The message should appear on the bus receiver
+    let received = rx.try_recv();
+    assert!(received.is_ok(), "Expected a message on the bus");
+    let msg = received.unwrap();
+    assert_eq!(msg.source_id, EndpointId(1));
+    assert_eq!(msg.header.system_id, 1);
+    assert_eq!(msg.header.component_id, 1);
+    assert_eq!(msg.message_id, 0); // HEARTBEAT message ID
+
+    println!("EndpointCore handle_incoming_frame happy path works correctly");
+}
+
+/// Test 2: handle_incoming_frame rejects SysID 0
+#[tokio::test]
+async fn test_endpoint_core_handle_incoming_sysid_zero_rejected() {
+    use mavrouter::router::create_bus;
+    use mavrouter::routing::RoutingTable;
+
+    let bus = create_bus(100);
+    let mut rx = bus.subscribe();
+    let routing_table = std::sync::Arc::new(mavrouter::RwLock::new(RoutingTable::new()));
+
+    let core = make_endpoint_core(
+        1,
+        bus.sender(),
+        routing_table,
+        Duration::ZERO,
+        EndpointFilters::default(),
+    );
+
+    let frame = make_heartbeat_frame(0, 1, 0); // system_id = 0
+
+    core.handle_incoming_frame(frame);
+
+    // The message should NOT appear on the bus
+    let received = rx.try_recv();
+    assert!(received.is_err(), "SysID 0 frame should not appear on bus");
+
+    println!("EndpointCore handle_incoming_frame rejects sysid 0 correctly");
+}
+
+/// Test 3: handle_incoming_frame rejects filtered messages (incoming block filter)
+#[tokio::test]
+async fn test_endpoint_core_handle_incoming_filter_rejection() {
+    use mavrouter::router::create_bus;
+    use mavrouter::routing::RoutingTable;
+
+    let bus = create_bus(100);
+    let mut rx = bus.subscribe();
+    let routing_table = std::sync::Arc::new(mavrouter::RwLock::new(RoutingTable::new()));
+
+    // Block msg_id=0 (HEARTBEAT) on incoming
+    let filters = EndpointFilters {
+        block_msg_id_in: HashSet::from([0]),
+        ..Default::default()
+    };
+
+    let core = make_endpoint_core(
+        1,
+        bus.sender(),
+        routing_table,
+        Duration::ZERO,
+        filters,
+    );
+
+    let frame = make_heartbeat_frame(1, 1, 0); // msg_id=0 (HEARTBEAT)
+
+    core.handle_incoming_frame(frame);
+
+    // The message should NOT appear on the bus because it's filtered
+    let received = rx.try_recv();
+    assert!(
+        received.is_err(),
+        "Filtered message should not appear on bus"
+    );
+
+    println!("EndpointCore handle_incoming_frame filter rejection works correctly");
+}
+
+/// Test 4: handle_incoming_frame dedup rejection - second identical frame is dropped
+#[tokio::test]
+async fn test_endpoint_core_handle_incoming_dedup_rejection() {
+    use mavrouter::router::create_bus;
+    use mavrouter::routing::RoutingTable;
+
+    let bus = create_bus(100);
+    let mut rx = bus.subscribe();
+    let routing_table = std::sync::Arc::new(mavrouter::RwLock::new(RoutingTable::new()));
+
+    let core = make_endpoint_core(
+        1,
+        bus.sender(),
+        routing_table,
+        Duration::from_secs(1), // dedup enabled with 1s TTL
+        EndpointFilters::default(),
+    );
+
+    // Create two identical frames (same raw bytes)
+    let frame1 = make_heartbeat_frame(1, 1, 0);
+    let frame2 = make_heartbeat_frame(1, 1, 0);
+
+    core.handle_incoming_frame(frame1);
+    core.handle_incoming_frame(frame2);
+
+    // First message should appear
+    let first = rx.try_recv();
+    assert!(first.is_ok(), "First frame should appear on bus");
+
+    // Second message should be deduped
+    let second = rx.try_recv();
+    assert!(
+        second.is_err(),
+        "Duplicate frame should NOT appear on bus"
+    );
+
+    println!("EndpointCore handle_incoming_frame dedup rejection works correctly");
+}
+
+/// Test 5: check_outgoing rejects messages from the same endpoint (self-origin)
+#[test]
+fn test_endpoint_core_check_outgoing_self_origin_rejected() {
+    use bytes::Bytes;
+    use mavlink::MavlinkVersion;
+    use mavrouter::mavlink_utils::MessageTarget;
+    use mavrouter::router::{create_bus, EndpointId, RoutedMessage};
+    use mavrouter::routing::RoutingTable;
+
+    let bus = create_bus(100);
+    let routing_table = std::sync::Arc::new(mavrouter::RwLock::new(RoutingTable::new()));
+
+    let core = make_endpoint_core(
+        1,
+        bus.sender(),
+        routing_table,
+        Duration::ZERO,
+        EndpointFilters::default(),
+    );
+
+    // Create a RoutedMessage from the SAME endpoint (id=1)
+    let msg = RoutedMessage {
+        source_id: EndpointId(1), // Same as core's id
+        header: MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        },
+        message_id: 0,
+        version: MavlinkVersion::V2,
+        timestamp_us: 0,
+        serialized_bytes: Bytes::from_static(b"test"),
+        target: MessageTarget {
+            system_id: 0,
+            component_id: 0,
+        },
+    };
+
+    assert!(
+        !core.check_outgoing(&msg),
+        "check_outgoing should reject messages from the same endpoint"
+    );
+
+    println!("EndpointCore check_outgoing self-origin rejection works correctly");
+}
+
+/// Test 6: check_outgoing rejects messages blocked by outgoing filter
+#[test]
+fn test_endpoint_core_check_outgoing_filter_rejection() {
+    use bytes::Bytes;
+    use mavlink::MavlinkVersion;
+    use mavrouter::mavlink_utils::MessageTarget;
+    use mavrouter::router::{create_bus, EndpointId, RoutedMessage};
+    use mavrouter::routing::RoutingTable;
+
+    let bus = create_bus(100);
+    let routing_table = std::sync::Arc::new(mavrouter::RwLock::new(RoutingTable::new()));
+
+    // Block msg_id=30 on outgoing
+    let filters = EndpointFilters {
+        block_msg_id_out: HashSet::from([30]),
+        ..Default::default()
+    };
+
+    let core = make_endpoint_core(
+        1,
+        bus.sender(),
+        routing_table,
+        Duration::ZERO,
+        filters,
+    );
+
+    // Create a RoutedMessage from a DIFFERENT endpoint with msg_id=30
+    let msg = RoutedMessage {
+        source_id: EndpointId(2), // Different from core's id
+        header: MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        },
+        message_id: 30, // Blocked by outgoing filter
+        version: MavlinkVersion::V2,
+        timestamp_us: 0,
+        serialized_bytes: Bytes::from_static(b"test"),
+        target: MessageTarget {
+            system_id: 0,
+            component_id: 0,
+        },
+    };
+
+    assert!(
+        !core.check_outgoing(&msg),
+        "check_outgoing should reject msg_id=30 due to outgoing filter"
+    );
+
+    println!("EndpointCore check_outgoing filter rejection works correctly");
+}
+
+/// Test 7: check_outgoing passes through valid messages from a different endpoint
+#[test]
+fn test_endpoint_core_check_outgoing_pass_through() {
+    use bytes::Bytes;
+    use mavlink::MavlinkVersion;
+    use mavrouter::mavlink_utils::MessageTarget;
+    use mavrouter::router::{create_bus, EndpointId, RoutedMessage};
+    use mavrouter::routing::RoutingTable;
+
+    let bus = create_bus(100);
+    let routing_table = std::sync::Arc::new(mavrouter::RwLock::new(RoutingTable::new()));
+
+    let core = make_endpoint_core(
+        1,
+        bus.sender(),
+        routing_table,
+        Duration::ZERO,
+        EndpointFilters::default(), // No filters
+    );
+
+    // Create a RoutedMessage from a DIFFERENT endpoint with broadcast target (sys=0)
+    let msg = RoutedMessage {
+        source_id: EndpointId(2), // Different from core's id
+        header: MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        },
+        message_id: 0,
+        version: MavlinkVersion::V2,
+        timestamp_us: 0,
+        serialized_bytes: Bytes::from_static(b"test"),
+        target: MessageTarget {
+            system_id: 0,  // Broadcast target
+            component_id: 0,
+        },
+    };
+
+    assert!(
+        core.check_outgoing(&msg),
+        "check_outgoing should pass through valid broadcast message from different endpoint"
+    );
+
+    println!("EndpointCore check_outgoing pass-through works correctly");
 }

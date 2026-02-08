@@ -66,17 +66,17 @@ fn test_routing_table_stress_functional() {
 
 #[test]
 fn test_dedup_memory_actually_bounded() {
-    let dedup = Dedup::new(Duration::from_millis(100));
+    let mut dedup = Dedup::new(Duration::from_millis(100));
     let iterations = stress_iterations();
     println!(
         "Running test_dedup_memory_actually_bounded with {} iterations",
         iterations
     );
 
-    // Insert N packets
+    // Insert N packets (was is_duplicate which never inserts -- bug fixed)
     for i in 0..iterations {
         let data = format!("packet_{}", i);
-        dedup.is_duplicate(data.as_bytes());
+        dedup.check_and_insert(data.as_bytes());
     }
 
     // Wait for cleanup
@@ -85,7 +85,7 @@ fn test_dedup_memory_actually_bounded() {
     // Insert another N (should not OOM, should prune old)
     for i in iterations..(iterations * 2) {
         let data = format!("packet_{}", i);
-        dedup.is_duplicate(data.as_bytes());
+        dedup.check_and_insert(data.as_bytes());
     }
 
     // If we get here without OOM, test passes
