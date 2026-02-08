@@ -5,9 +5,12 @@
 //! allow or block messages based on their message ID, source component ID,
 //! or source system ID.
 
+use ahash::AHashSet;
 use mavlink::MavHeader;
 use serde::Deserialize;
-use std::collections::HashSet;
+
+// Use ahash for faster hashing in hot-path filter lookups (issue #18)
+type HashSet<T> = AHashSet<T>;
 
 /// Defines a set of filters to be applied to MAVLink messages for a specific endpoint.
 ///

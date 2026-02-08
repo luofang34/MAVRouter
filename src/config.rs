@@ -249,15 +249,16 @@ impl Config {
     /// conflicting settings.
     #[allow(unused_variables)] // 'device' is unused on non-Unix platforms
     pub fn validate(&self) -> Result<()> {
-        let mut ports = std::collections::HashSet::new();
+        // Track (protocol, port) pairs -- TCP and UDP on the same port are distinct OS resources
+        let mut ports: std::collections::HashSet<(&str, u16)> = std::collections::HashSet::new();
 
         if let Some(tcp_port) = self.general.tcp_port {
-            ports.insert(tcp_port);
+            ports.insert(("tcp", tcp_port));
         }
 
         for (i, endpoint) in self.endpoint.iter().enumerate() {
             match endpoint {
-                EndpointConfig::Tcp { address, .. } | EndpointConfig::Udp { address, .. } => {
+                EndpointConfig::Tcp { address, .. } => {
                     let addr = address.parse::<std::net::SocketAddr>().map_err(|e| {
                         RouterError::config(format!(
                             "Invalid address in endpoint {}: {} ({})",
@@ -265,9 +266,25 @@ impl Config {
                         ))
                     })?;
 
-                    if !ports.insert(addr.port()) {
+                    if !ports.insert(("tcp", addr.port())) {
                         return Err(RouterError::config(format!(
-                            "Duplicate port {} in endpoint {}",
+                            "Duplicate TCP port {} in endpoint {}",
+                            addr.port(),
+                            i
+                        )));
+                    }
+                }
+                EndpointConfig::Udp { address, .. } => {
+                    let addr = address.parse::<std::net::SocketAddr>().map_err(|e| {
+                        RouterError::config(format!(
+                            "Invalid address in endpoint {}: {} ({})",
+                            i, address, e
+                        ))
+                    })?;
+
+                    if !ports.insert(("udp", addr.port())) {
+                        return Err(RouterError::config(format!(
+                            "Duplicate UDP port {} in endpoint {}",
                             addr.port(),
                             i
                         )));
@@ -298,7 +315,7 @@ impl Config {
 
             // Helper closure to check msg_ids
             let check_msg_ids =
-                |ids: &std::collections::HashSet<u32>, type_str: &str| -> Result<()> {
+                |ids: &ahash::AHashSet<u32>, type_str: &str| -> Result<()> {
                     for &msg_id in ids {
                         if msg_id > 65535 {
                             return Err(RouterError::config(format!(
@@ -321,6 +338,19 @@ impl Config {
                 "bus_capacity too small: {}",
                 self.general.bus_capacity
             )));
+        }
+
+        if self.general.bus_capacity > 1_000_000 {
+            return Err(RouterError::config(format!(
+                "bus_capacity too large: {} (must be <= 1000000)",
+                self.general.bus_capacity
+            )));
+        }
+
+        if self.general.routing_table_prune_interval_secs == 0 {
+            return Err(RouterError::config(
+                "routing_table_prune_interval_secs must be greater than 0".to_string(),
+            ));
         }
 
         Ok(())
@@ -360,7 +390,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_duplicate_port_detection() {
+    fn test_duplicate_tcp_port_detection() {
+        let config = Config {
+            general: GeneralConfig {
+                tcp_port: Some(5760),
+                ..Default::default()
+            },
+            endpoint: vec![EndpointConfig::Tcp {
+                address: "127.0.0.1:5760".to_string(),
+                mode: EndpointMode::Client,
+                filters: EndpointFilters::default(),
+            }],
+        };
+
+        assert!(
+            config.validate().is_err(),
+            "Should detect duplicate TCP port"
+        );
+    }
+
+    #[test]
+    fn test_cross_protocol_same_port_allowed() {
+        // TCP and UDP on the same port should be allowed (different OS resources)
         let config = Config {
             general: GeneralConfig {
                 tcp_port: Some(5760),
@@ -373,7 +424,37 @@ mod tests {
             }],
         };
 
-        assert!(config.validate().is_err(), "Should detect duplicate port");
+        assert!(
+            config.validate().is_ok(),
+            "TCP and UDP on the same port should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_bus_capacity_too_large() {
+        let config = Config {
+            general: GeneralConfig {
+                bus_capacity: 2_000_000,
+                ..Default::default()
+            },
+            endpoint: vec![],
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_prune_interval_zero() {
+        let config = Config {
+            general: GeneralConfig {
+                routing_table_prune_interval_secs: 0,
+                ..Default::default()
+            },
+            endpoint: vec![],
+        };
+        assert!(
+            config.validate().is_err(),
+            "prune_interval_secs = 0 should be rejected"
+        );
     }
 
     #[test]

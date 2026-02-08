@@ -36,7 +36,7 @@ tokio-serial = "5.4"
 thiserror = "1.0"
 tokio-util = { version = "0.7", features = ["codec", "net"] }
 bytes = "1.0"
-ahash = "0.8"
+ahash = { version = "0.8", features = ["serde"] }
 dashmap = "5.5"
 memchr = "2.7"
 async-broadcast = "0.7"
@@ -48,6 +48,14 @@ num_cpus = "1.16"
 
 [[bench]]
 name = "routing_benchmark"
+harness = false
+
+[[bench]]
+name = "filter_bench"
+harness = false
+
+[[bench]]
+name = "clone_benchmark"
 harness = false
 
 [lints.rust]

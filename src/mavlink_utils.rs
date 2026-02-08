@@ -16,22 +16,6 @@ pub struct MessageTarget {
     pub component_id: u8,
 }
 
-impl MessageTarget {
-    /// Returns `true` if this `MessageTarget` indicates a broadcast message.
-    /// A broadcast message typically has `system_id` set to 0.
-    #[allow(dead_code)]
-    pub fn is_broadcast(&self) -> bool {
-        self.system_id == 0
-    }
-
-    /// Returns `true` if this `MessageTarget` indicates a system-wide message.
-    /// A system-wide message has `component_id` set to 0, targeting all
-    /// components within a specific system.
-    #[allow(dead_code)]
-    pub fn is_system_wide(&self) -> bool {
-        self.component_id == 0
-    }
-}
 
 /// Extracts the target `system_id` and `component_id` from a MAVLink message.
 ///
@@ -182,14 +166,14 @@ mod tests {
         let target = extract_target(&MavMessage::COMMAND_LONG(cmd));
         assert_eq!(target.system_id, 1);
         assert_eq!(target.component_id, 2);
-        assert!(!target.is_broadcast());
+        assert_ne!(target.system_id, 0);
     }
 
     #[test]
     fn test_heartbeat_broadcast() {
         let hb = HEARTBEAT_DATA::default();
         let target = extract_target(&MavMessage::HEARTBEAT(hb));
-        assert!(target.is_broadcast());
+        assert_eq!(target.system_id, 0);
     }
 
     #[test]
@@ -216,8 +200,8 @@ mod tests {
         let target = extract_target(&MavMessage::MISSION_REQUEST_LIST(mission));
         assert_eq!(target.system_id, 1);
         assert_eq!(target.component_id, 190);
-        assert!(!target.is_broadcast());
-        assert!(!target.is_system_wide());
+        assert_ne!(target.system_id, 0);
+        assert_ne!(target.component_id, 0);
     }
 
     #[test]
@@ -230,8 +214,8 @@ mod tests {
         let target = extract_target(&MavMessage::SET_MODE(mode));
         assert_eq!(target.system_id, 1);
         assert_eq!(target.component_id, 0);
-        assert!(!target.is_broadcast());
-        assert!(target.is_system_wide());
+        assert_ne!(target.system_id, 0);
+        assert_eq!(target.component_id, 0);
     }
 
     #[test]
@@ -252,6 +236,6 @@ mod tests {
         // COMMAND_ACK is a broadcast message (returns 0,0)
         let ack = COMMAND_ACK_DATA::default();
         let target = extract_target(&MavMessage::COMMAND_ACK(ack));
-        assert!(target.is_broadcast());
+        assert_eq!(target.system_id, 0);
     }
 }
