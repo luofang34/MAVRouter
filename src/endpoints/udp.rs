@@ -137,7 +137,11 @@ pub async fn run(
                             raw_bytes,
                         });
                     } else {
-                        trace!("UDP: Failed to parse MAVLink packet from {} ({} bytes)", addr, len);
+                        trace!(
+                            "UDP: Failed to parse MAVLink packet from {} ({} bytes)",
+                            addr,
+                            len
+                        );
                     }
                 }
                 Err(e) => {

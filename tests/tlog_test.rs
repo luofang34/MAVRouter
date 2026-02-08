@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used)]
 
 use bytes::Bytes;
-use mavlink::{Message, MavlinkVersion};
+use mavlink::{MavlinkVersion, Message};
 use mavrouter::router::{create_bus, EndpointId, RoutedMessage};
 use mavrouter::Router;
 use serial_test::serial;
@@ -15,8 +15,7 @@ fn build_heartbeat_bytes() -> (mavlink::MavHeader, u32, Vec<u8>) {
         component_id: 1,
         sequence: 0,
     };
-    let msg =
-        mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
+    let msg = mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
     let mut buf: Vec<u8> = Vec::new();
     mavlink::write_v2_msg(&mut buf, header, &msg).unwrap();
     let message_id = msg.message_id();
@@ -108,9 +107,10 @@ async fn test_tlog_message_format() {
     let tlog_token = cancel_token.clone();
 
     // Spawn the TLOG endpoint
-    let tlog_handle = tokio::spawn(async move {
-        mavrouter::endpoints::tlog::run(dir_str, bus_rx, tlog_token).await
-    });
+    let tlog_handle =
+        tokio::spawn(
+            async move { mavrouter::endpoints::tlog::run(dir_str, bus_rx, tlog_token).await },
+        );
 
     // Give TLOG endpoint time to initialize and create the file
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -210,7 +210,8 @@ async fn test_tlog_message_format() {
         "MAVLink bytes length mismatch"
     );
     assert_eq!(
-        mavlink_bytes, &serialized[..],
+        mavlink_bytes,
+        &serialized[..],
         "MAVLink bytes content mismatch"
     );
 

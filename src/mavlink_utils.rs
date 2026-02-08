@@ -16,7 +16,6 @@ pub struct MessageTarget {
     pub component_id: u8,
 }
 
-
 /// Extracts the target `system_id` and `component_id` from a MAVLink message.
 ///
 /// This function inspects various MAVLink message types to identify their

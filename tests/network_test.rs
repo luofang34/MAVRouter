@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::panic)]
 
 use mavlink::MavHeader;
 use mavrouter::Router;
@@ -93,7 +94,10 @@ mode = "server"
         }
     }
 
-    assert!(received, "Failed to receive heartbeat on UDP socket from router's UDP client endpoint");
+    assert!(
+        received,
+        "Failed to receive heartbeat on UDP socket from router's UDP client endpoint"
+    );
 
     // 5. Cleanup
     router.stop().await;
@@ -138,13 +142,11 @@ mode = "server"
     let router = Router::from_str(toml_config).await.unwrap();
 
     // 3. Accept the incoming TCP connection from the router
-    let (mut tcp_stream, _addr) = tokio::time::timeout(
-        Duration::from_secs(5),
-        tcp_listener.accept(),
-    )
-    .await
-    .expect("Timeout waiting for router to connect as TCP client")
-    .unwrap();
+    let (mut tcp_stream, _addr) =
+        tokio::time::timeout(Duration::from_secs(5), tcp_listener.accept())
+            .await
+            .expect("Timeout waiting for router to connect as TCP client")
+            .unwrap();
 
     // Give the connection a moment to stabilize
     tokio::time::sleep(Duration::from_millis(200)).await;

@@ -10,13 +10,13 @@
 //! - Stats (statistics aggregation)
 //! - Config validation
 
+use ahash::AHashSet as HashSet;
 use mavlink::{common::MavMessage, MavHeader};
 use mavrouter::dedup::{ConcurrentDedup, Dedup};
 use mavrouter::filter::EndpointFilters;
 use mavrouter::framing::StreamParser;
 use mavrouter::routing::RoutingStats;
 use mavrouter::stats::StatsHistory;
-use ahash::AHashSet as HashSet;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -695,13 +695,7 @@ async fn test_endpoint_core_handle_incoming_filter_rejection() {
         ..Default::default()
     };
 
-    let core = make_endpoint_core(
-        1,
-        bus.sender(),
-        routing_table,
-        Duration::ZERO,
-        filters,
-    );
+    let core = make_endpoint_core(1, bus.sender(), routing_table, Duration::ZERO, filters);
 
     let frame = make_heartbeat_frame(1, 1, 0); // msg_id=0 (HEARTBEAT)
 
@@ -748,10 +742,7 @@ async fn test_endpoint_core_handle_incoming_dedup_rejection() {
 
     // Second message should be deduped
     let second = rx.try_recv();
-    assert!(
-        second.is_err(),
-        "Duplicate frame should NOT appear on bus"
-    );
+    assert!(second.is_err(), "Duplicate frame should NOT appear on bus");
 
     println!("EndpointCore handle_incoming_frame dedup rejection works correctly");
 }
@@ -820,13 +811,7 @@ fn test_endpoint_core_check_outgoing_filter_rejection() {
         ..Default::default()
     };
 
-    let core = make_endpoint_core(
-        1,
-        bus.sender(),
-        routing_table,
-        Duration::ZERO,
-        filters,
-    );
+    let core = make_endpoint_core(1, bus.sender(), routing_table, Duration::ZERO, filters);
 
     // Create a RoutedMessage from a DIFFERENT endpoint with msg_id=30
     let msg = RoutedMessage {
@@ -887,7 +872,7 @@ fn test_endpoint_core_check_outgoing_pass_through() {
         timestamp_us: 0,
         serialized_bytes: Bytes::from_static(b"test"),
         target: MessageTarget {
-            system_id: 0,  // Broadcast target
+            system_id: 0, // Broadcast target
             component_id: 0,
         },
     };

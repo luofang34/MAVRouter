@@ -314,18 +314,17 @@ impl Config {
             };
 
             // Helper closure to check msg_ids
-            let check_msg_ids =
-                |ids: &ahash::AHashSet<u32>, type_str: &str| -> Result<()> {
-                    for &msg_id in ids {
-                        if msg_id > 65535 {
-                            return Err(RouterError::config(format!(
-                                "Invalid {} msg_id in endpoint {}: {} (must be <= 65535)",
-                                type_str, i, msg_id
-                            )));
-                        }
+            let check_msg_ids = |ids: &ahash::AHashSet<u32>, type_str: &str| -> Result<()> {
+                for &msg_id in ids {
+                    if msg_id > 65535 {
+                        return Err(RouterError::config(format!(
+                            "Invalid {} msg_id in endpoint {}: {} (must be <= 65535)",
+                            type_str, i, msg_id
+                        )));
                     }
-                    Ok(())
-                };
+                }
+                Ok(())
+            };
 
             check_msg_ids(&filters.allow_msg_id_out, "allow_out")?;
             check_msg_ids(&filters.block_msg_id_out, "block_out")?;
