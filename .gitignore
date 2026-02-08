@@ -19,3 +19,5 @@ router_*.log
 
 # CI configuration temp files
 ci_config.toml
+
+.claude
