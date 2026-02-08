@@ -104,7 +104,8 @@ impl RoutingTable {
                 if let Some(removed_entry) = self.sys_routes.remove(&oldest_sysid) {
                     for &ep_id in &removed_entry.endpoints {
                         if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
-                            *occ.get_mut() -= 1;
+                            let count = occ.get_mut();
+                            *count = count.saturating_sub(1);
                             if *occ.get() == 0 {
                                 occ.remove();
                             }
@@ -116,7 +117,8 @@ impl RoutingTable {
                     if *s == oldest_sysid {
                         for &ep_id in &entry.endpoints {
                             if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
-                                *occ.get_mut() -= 1;
+                                let count = occ.get_mut();
+                                *count = count.saturating_sub(1);
                                 if *occ.get() == 0 {
                                     occ.remove();
                                 }
@@ -177,7 +179,6 @@ impl RoutingTable {
     /// Checks if an update is needed for the given route.
     /// An update is needed if the route is unknown, the endpoint isn't registered,
     /// or the last update was more than 1 second ago.
-    #[allow(dead_code)] // This function is used in src/endpoint_core.rs
     pub fn needs_update_for_endpoint(
         &self,
         endpoint_id: EndpointId,
@@ -304,7 +305,8 @@ impl RoutingTable {
         // Decrement counts and remove endpoint_ids if their count reaches zero
         for (ep_id, count) in removed_endpoint_counts {
             if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
-                *occ.get_mut() -= count;
+                let current = occ.get_mut();
+                *current = current.saturating_sub(count);
                 if *occ.get() == 0 {
                     occ.remove();
                 }

@@ -93,25 +93,9 @@ impl From<anyhow::Error> for RouterError {
     }
 }
 
-/// Convert from std::io::Error
-impl From<io::Error> for RouterError {
-    fn from(err: io::Error) -> Self {
-        Self::Network {
-            endpoint: "unknown".to_string(),
-            source: err,
-        }
-    }
-}
-
-/// Convert from tokio_serial::Error
-impl From<tokio_serial::Error> for RouterError {
-    fn from(err: tokio_serial::Error) -> Self {
-        Self::Serial {
-            device: "unknown".to_string(),
-            source: err,
-        }
-    }
-}
+// Blanket From<io::Error> and From<tokio_serial::Error> impls intentionally removed.
+// Use RouterError::network(), RouterError::serial(), or RouterError::filesystem()
+// with .map_err() at each call site to provide proper context.
 
 #[cfg(test)]
 mod tests {
@@ -141,10 +125,12 @@ mod tests {
     }
 
     #[test]
-    fn test_io_error_conversion() {
+    fn test_io_error_requires_context() {
+        // Verify that io::Error must be wrapped with context via helper methods
         let io_err = io::Error::new(io::ErrorKind::BrokenPipe, "broken");
-        let router_err: RouterError = io_err.into();
+        let router_err = RouterError::network("test-endpoint", io_err);
         assert!(matches!(router_err, RouterError::Network { .. }));
+        assert!(router_err.to_string().contains("test-endpoint"));
     }
 
     #[test]
