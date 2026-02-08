@@ -16,7 +16,9 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio_serial::SerialPortBuilderExt;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::info;
+#[cfg(unix)]
+use tracing::warn;
 
 /// Runs the serial endpoint logic, continuously attempting to open and
 /// communicate over the specified serial device.

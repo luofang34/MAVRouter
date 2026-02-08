@@ -21,15 +21,22 @@ mod stats;
 
 use crate::config::Config;
 use crate::error::Result;
-use crate::orchestration::supervise;
-use crate::routing::RoutingTable;
 use crate::stats::StatsHistory;
 use clap::Parser;
-use parking_lot::RwLock;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{error, info};
+
+#[cfg(unix)]
+use crate::orchestration::supervise;
+#[cfg(unix)]
+use crate::routing::RoutingTable;
+#[cfg(unix)]
+use parking_lot::RwLock;
+#[cfg(unix)]
+use std::sync::Arc;
+#[cfg(unix)]
+use tracing::warn;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;

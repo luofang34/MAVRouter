@@ -83,6 +83,7 @@ pub struct GeneralConfig {
     /// Path to the Unix socket for querying stats.
     /// Default: None (disabled). Set to a path string to enable (e.g., "/tmp/mavrouter.sock").
     #[serde(default)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub stats_socket_path: Option<String>,
 }
 

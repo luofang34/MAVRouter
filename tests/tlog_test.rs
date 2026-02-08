@@ -30,6 +30,13 @@ fn create_test_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Helper: convert a path to a TOML-safe string (forward slashes, no backslash escapes).
+fn toml_safe_path(path: &std::path::Path) -> String {
+    path.to_str()
+        .expect("temp dir should be valid UTF-8")
+        .replace('\\', "/")
+}
+
 /// Helper: remove temp directory after test.
 fn cleanup_test_dir(dir: &std::path::Path) {
     let _ = std::fs::remove_dir_all(dir);
@@ -41,7 +48,7 @@ fn cleanup_test_dir(dir: &std::path::Path) {
 #[serial]
 async fn test_tlog_file_creation() {
     let temp_dir = create_test_dir("tlog_creation");
-    let log_path = temp_dir.to_str().expect("temp dir should be valid UTF-8");
+    let log_path = toml_safe_path(&temp_dir);
 
     // Configure a router with a UDP endpoint AND TLOG logging enabled
     let toml_cfg = format!(
@@ -94,7 +101,6 @@ mode = "server"
 #[serial]
 async fn test_tlog_message_format() {
     let temp_dir = create_test_dir("tlog_format");
-    let log_path = temp_dir.to_str().expect("temp dir should be valid UTF-8");
 
     // We use a low-level approach: create a bus, spawn the TLOG endpoint directly,
     // send a RoutedMessage, then verify the file contents.
@@ -103,7 +109,10 @@ async fn test_tlog_message_format() {
     let bus_rx = bus.subscribe();
     let cancel_token = tokio_util::sync::CancellationToken::new();
 
-    let dir_str = log_path.to_string();
+    let dir_str = temp_dir
+        .to_str()
+        .expect("temp dir should be valid UTF-8")
+        .to_string();
     let tlog_token = cancel_token.clone();
 
     // Spawn the TLOG endpoint
