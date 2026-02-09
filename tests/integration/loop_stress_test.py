@@ -192,8 +192,8 @@ async def main():
         # Round 3: Extreme Load (10s, 100 clients, 20000 msg/s total)
         t3, m3 = await run_load_round("Round 3: Extreme Load", 10, 100, 200)
 
-        threshold_r2 = 7000
-        threshold_r3 = 11000
+        threshold_r2 = 7500
+        threshold_r3 = 11500
         max_mem_growth = 50.0
 
     elif args.profile == 'serial':
