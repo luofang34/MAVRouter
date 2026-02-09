@@ -1,12 +1,12 @@
 [package]
 name = "mavrouter"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["Fang Luo <luofang@luofang.org>"]
 description = "MAVLink router"
 license = "AGPL-3.0"
-repository = "https://github.com/luofang34/mavrouter-rs"
-homepage = "https://github.com/luofang34/mavrouter-rs"
+repository = "https://github.com/luofang34/MAVRouter"
+homepage = "https://github.com/luofang34/MAVRouter"
 documentation = "https://docs.rs/mavrouter"
 readme = "README.md"
 keywords = ["mavlink", "router", "telemetry", "uav", "embedded"]
