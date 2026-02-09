@@ -21,3 +21,5 @@ router_*.log
 ci_config.toml
 
 .claude
+
+*.pyc
