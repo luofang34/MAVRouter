@@ -14,11 +14,11 @@ use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use async_broadcast::{Receiver, Sender};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast;
 
 /// Global counter for TCP client endpoint IDs, starting high enough
 /// to avoid collision with configured endpoint IDs (issue #6).
@@ -65,13 +65,17 @@ pub async fn run(
     id: usize,
     address: String,
     mode: crate::config::EndpointMode,
-    bus_tx: Sender<RoutedMessage>,
-    bus_rx: Receiver<RoutedMessage>,
+    bus_tx: broadcast::Sender<RoutedMessage>,
+    bus_rx: broadcast::Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
     dedup: ConcurrentDedup,
     filters: EndpointFilters,
     token: CancellationToken,
 ) -> Result<()> {
+    // With tokio::broadcast, new subscribers are created via bus_tx.subscribe()
+    // rather than cloning bus_rx. Drop the receiver to avoid unused variable warnings.
+    drop(bus_rx);
+
     let core = EndpointCore {
         id: EndpointId(id),
         bus_tx: bus_tx.clone(),
@@ -117,11 +121,11 @@ pub async fn run(
                                     filters: core.filters.clone(),
                                     update_routing: true, // Required for targeted message routing
                                 };
-                                let rx_client = bus_rx.clone();
+                                let rx_client = core.bus_tx.subscribe();
                                 let token_client = token.clone();
 
                                 join_set.spawn(async move {
-                                    let (read, write) = tokio::io::split(stream);
+                                    let (read, write) = stream.into_split();
                                     let name = format!("TCP Client {}", addr);
                                     let _ = run_stream_loop(read, write, rx_client, core_client, token_client, name).await;
                                 });
@@ -151,12 +155,12 @@ pub async fn run(
                         let _ = stream.set_nodelay(true);
                         info!("Connected to {}", address);
                         backoff.reset();
-                        let (read, write) = tokio::io::split(stream);
+                        let (read, write) = stream.into_split();
                         let name = format!("TCP Client {}", address);
                         let _ = run_stream_loop(
                             read,
                             write,
-                            bus_rx.clone(),
+                            bus_tx.subscribe(),
                             core.clone(),
                             token.clone(),
                             name,

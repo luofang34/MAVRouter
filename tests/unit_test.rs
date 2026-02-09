@@ -559,7 +559,7 @@ async fn test_message_bus_overflow() {
                 component_id: 0,
             },
         };
-        let _ = tx.try_broadcast(msg);
+        let _ = tx.send(msg);
     }
 
     // Should not panic
@@ -598,7 +598,7 @@ fn make_heartbeat_frame(
 /// Helper: build an EndpointCore with the given configuration
 fn make_endpoint_core(
     id: usize,
-    bus_tx: async_broadcast::Sender<mavrouter::router::RoutedMessage>,
+    bus_tx: tokio::sync::broadcast::Sender<mavrouter::router::RoutedMessage>,
     routing_table: std::sync::Arc<mavrouter::RwLock<mavrouter::routing::RoutingTable>>,
     dedup_period: Duration,
     filters: EndpointFilters,

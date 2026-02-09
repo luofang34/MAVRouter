@@ -2,7 +2,6 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
@@ -116,7 +115,7 @@ jobs:
           mkdir -p logs
           cat > ci_config.toml << EOF
           [general]
-          bus_capacity = 1000
+          bus_capacity = 5000
           tcp_port = 5760
           log = "logs"
           log_telemetry = true

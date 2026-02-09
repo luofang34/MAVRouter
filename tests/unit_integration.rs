@@ -82,7 +82,7 @@ async fn test_stream_loopback() {
             component_id: 0,
         },
     };
-    bus.tx.broadcast(msg_out).await.unwrap();
+    bus.tx.send(msg_out).unwrap();
 
     let mut client_rx_buf = [0u8; 1024];
     let n = client.read(&mut client_rx_buf).await.unwrap();
