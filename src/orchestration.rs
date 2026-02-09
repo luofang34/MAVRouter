@@ -94,7 +94,6 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
     if let Some(port) = config.general.tcp_port {
         let name = format!("Implicit TCP Server :{}", port);
         let bus_tx = bus.sender();
-        let bus_rx = bus.subscribe();
         let rt = routing_table.clone();
         let dd = dedup.clone();
         let id = config.endpoint.len();
@@ -107,7 +106,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
             task_token.clone(),
             move || {
                 let bus_tx = bus_tx.clone();
-                let bus_rx = bus_rx.clone();
+                let bus_rx = bus_tx.subscribe();
                 let rt = rt.clone();
                 let dd = dd.clone();
                 let filters = filters.clone();
@@ -126,7 +125,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
     if let Some(log_dir) = &config.general.log {
         if config.general.log_telemetry {
             let name = format!("TLog Logger {}", log_dir);
-            let bus_rx = bus.subscribe();
+            let bus_tx_tlog = bus.sender();
             let dir = log_dir.clone();
             let task_token = cancel_token.child_token();
 
@@ -134,7 +133,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 name,
                 task_token.clone(),
                 move || {
-                    let bus_rx = bus_rx.clone();
+                    let bus_rx = bus_tx_tlog.subscribe();
                     let dir = dir.clone();
                     let token = task_token.clone();
                     async move { crate::endpoints::tlog::run(dir, bus_rx, token).await }

@@ -1,7 +1,7 @@
-use async_broadcast::{Receiver, Sender};
 use bytes::Bytes;
 use mavlink::{MavHeader, MavlinkVersion};
 use std::fmt;
+use tokio::sync::broadcast;
 
 use crate::mavlink_utils::MessageTarget;
 
@@ -40,30 +40,33 @@ pub struct RoutedMessage {
 
 /// Message bus handle used to distribute `RoutedMessage`s
 /// to all active endpoints and internal router components.
+///
+/// Uses `tokio::sync::broadcast` for lock-free message distribution.
+/// New subscribers are created via `sender.subscribe()` (not receiver clone).
 #[derive(Clone)]
 pub struct MessageBus {
-    /// Sender half of the bus.
-    pub tx: Sender<RoutedMessage>,
-    /// Template receiver that can be cloned for subscribers.
-    pub rx: Receiver<RoutedMessage>,
+    /// Sender half of the bus. Also used to create new subscribers via `subscribe()`.
+    pub tx: broadcast::Sender<RoutedMessage>,
 }
 
 impl MessageBus {
     /// Create a new subscriber to the bus.
-    pub fn subscribe(&self) -> Receiver<RoutedMessage> {
-        self.rx.clone()
+    pub fn subscribe(&self) -> broadcast::Receiver<RoutedMessage> {
+        self.tx.subscribe()
     }
 
     /// Clone the sender half of the bus.
-    pub fn sender(&self) -> Sender<RoutedMessage> {
+    pub fn sender(&self) -> broadcast::Sender<RoutedMessage> {
         self.tx.clone()
     }
 }
 
 /// Creates a new message bus with the specified capacity.
 ///
-/// The message bus is an `async_broadcast` channel, which allows multiple
+/// The message bus is a `tokio::sync::broadcast` channel, which allows multiple
 /// receivers to subscribe and receive copies of messages sent through it.
+/// Slow receivers that fall behind will automatically skip oldest messages
+/// (lagged behavior).
 ///
 /// # Arguments
 ///
@@ -73,7 +76,7 @@ impl MessageBus {
 ///
 /// # Returns
 ///
-/// A `MessageBus` instance containing both sender and template receiver.
+/// A `MessageBus` instance containing the sender (subscribers are created from it).
 ///
 /// # Example
 ///
@@ -84,10 +87,8 @@ impl MessageBus {
 /// // Endpoints can now subscribe to this bus
 /// ```
 pub fn create_bus(capacity: usize) -> MessageBus {
-    let (mut tx, rx) = async_broadcast::broadcast(capacity);
-    // Allow overflow to drop oldest messages rather than blocking all producers
-    tx.set_overflow(true);
-    MessageBus { tx, rx }
+    let (tx, _rx) = broadcast::channel(capacity);
+    MessageBus { tx }
 }
 
 #[cfg(test)]
@@ -114,8 +115,7 @@ mod tests {
         };
 
         bus.tx
-            .broadcast(msg.clone())
-            .await
+            .send(msg.clone())
             .expect("Failed to send test message");
 
         let received = rx.recv().await.expect("Failed to receive test message");

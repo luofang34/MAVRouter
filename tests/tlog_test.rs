@@ -146,10 +146,7 @@ async fn test_tlog_message_format() {
     };
 
     // Send the message on the bus
-    bus.tx
-        .broadcast(routed_msg)
-        .await
-        .expect("should broadcast message");
+    bus.tx.send(routed_msg).expect("should broadcast message");
 
     // Wait for flush interval (1 second) + some margin
     tokio::time::sleep(Duration::from_millis(1500)).await;

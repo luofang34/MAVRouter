@@ -15,9 +15,9 @@ use crate::filter::EndpointFilters;
 use crate::framing::MavlinkFrame;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use async_broadcast::{Receiver, RecvError, Sender};
 use bytes::Bytes;
 use dashmap::DashMap;
+use tokio::sync::broadcast::{self, error::RecvError};
 // futures::join_all removed - sequential sends avoid Vec allocation (issue #17)
 use mavlink::MavlinkVersion;
 use parking_lot::RwLock;
@@ -65,8 +65,8 @@ pub async fn run(
     id: usize,
     address: String,
     mode: crate::config::EndpointMode,
-    bus_tx: Sender<RoutedMessage>,
-    bus_rx: Receiver<RoutedMessage>,
+    bus_tx: broadcast::Sender<RoutedMessage>,
+    bus_rx: broadcast::Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
     dedup: ConcurrentDedup,
     filters: EndpointFilters,
@@ -188,7 +188,7 @@ pub async fn run(
                         }
                     }
                 }
-                Err(RecvError::Overflowed(n)) => {
+                Err(RecvError::Lagged(n)) => {
                     warn!("UDP Sender lagged: missed {} messages", n);
                 }
                 Err(RecvError::Closed) => break,

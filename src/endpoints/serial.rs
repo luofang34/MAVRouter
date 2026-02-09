@@ -11,9 +11,9 @@ use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use async_broadcast::{Receiver, Sender};
 use parking_lot::RwLock;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tokio_serial::SerialPortBuilderExt;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -55,8 +55,8 @@ pub async fn run(
     id: usize,
     device: String,
     baud: u32,
-    bus_tx: Sender<RoutedMessage>,
-    bus_rx: Receiver<RoutedMessage>,
+    bus_tx: broadcast::Sender<RoutedMessage>,
+    bus_rx: broadcast::Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
     dedup: ConcurrentDedup,
     filters: EndpointFilters,
@@ -101,7 +101,7 @@ pub async fn run(
 async fn open_and_run(
     device: &str,
     baud: u32,
-    bus_rx: Receiver<RoutedMessage>,
+    bus_rx: broadcast::Receiver<RoutedMessage>,
     core: EndpointCore,
     token: CancellationToken,
 ) -> Result<()> {

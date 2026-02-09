@@ -12,14 +12,14 @@ use crate::framing::{MavlinkFrame, StreamParser};
 use crate::mavlink_utils::extract_target;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use async_broadcast::{Receiver, RecvError, Sender, TryRecvError};
 use mavlink::Message;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
+use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace, warn};
+use tracing::{trace, warn};
 
 /// Exponential backoff helper for connection retries.
 #[derive(Debug)]
@@ -79,7 +79,7 @@ pub struct EndpointCore {
     /// Unique identifier for this endpoint.
     pub id: EndpointId,
     /// Sender half of the global message bus for publishing incoming messages.
-    pub bus_tx: Sender<RoutedMessage>,
+    pub bus_tx: broadcast::Sender<RoutedMessage>,
     /// Shared routing table for learning and querying MAVLink network topology.
     pub routing_table: Arc<RwLock<RoutingTable>>,
     /// Shared concurrent deduplication instance (sharded for multicore scalability).
@@ -186,7 +186,7 @@ impl EndpointCore {
         let target = extract_target(&frame.message);
 
         // Send lightweight RoutedMessage (no Arc allocation - message_id cached)
-        if let Err(e) = self.bus_tx.try_broadcast(RoutedMessage {
+        if let Err(e) = self.bus_tx.send(RoutedMessage {
             source_id: self.id,
             header: frame.header,
             message_id,
@@ -238,7 +238,7 @@ impl EndpointCore {
         let should_send = rt.should_send(self.id, target.system_id, target.component_id);
 
         if !should_send {
-            debug!(
+            trace!(
                 endpoint_id = %self.id,
                 source_id = %msg.source_id,
                 target_sys = target.system_id,
@@ -247,7 +247,7 @@ impl EndpointCore {
                 "Routing decision: DROP (no route to target)"
             );
         } else {
-            debug!(
+            trace!(
                 endpoint_id = %self.id,
                 source_id = %msg.source_id,
                 target_sys = target.system_id,
@@ -293,7 +293,7 @@ impl EndpointCore {
 pub async fn run_stream_loop<R, W>(
     mut reader: R,
     writer: W,
-    mut bus_rx: Receiver<RoutedMessage>,
+    mut bus_rx: broadcast::Receiver<RoutedMessage>,
     core: EndpointCore,
     cancel_token: CancellationToken,
     name: String,
@@ -315,75 +315,73 @@ where
         let mut buf = [0u8; 4096];
 
         loop {
-            tokio::select! {
-                _ = cancel_token_for_reader_loop.cancelled() => return Ok(()),
-                read_res = reader.read(&mut buf) => {
-                    match read_res {
-                        Ok(0) => return Ok(()), // EOF
-                        Ok(n) => {
-                            parser.push(&buf[..n]);
-                            while let Some(frame) = parser.parse_next() {
-                                core_read.handle_incoming_frame(frame);
-                            }
-                        }
-                        Err(e) => {
-                            return Err(RouterError::network(&name_read, e));
-                        }
+            if cancel_token_for_reader_loop.is_cancelled() {
+                return Ok(());
+            }
+            match reader.read(&mut buf).await {
+                Ok(0) => return Ok(()), // EOF
+                Ok(n) => {
+                    parser.push(&buf[..n]);
+                    while let Some(frame) = parser.parse_next() {
+                        core_read.handle_incoming_frame(frame);
                     }
+                }
+                Err(e) => {
+                    return Err(RouterError::network(&name_read, e));
                 }
             }
         }
     };
 
     let writer_loop = async move {
-        let mut writer = BufWriter::new(writer);
+        let mut writer = BufWriter::with_capacity(65536, writer);
 
         loop {
-            tokio::select! {
-                _ = cancel_token_for_writer_loop.cancelled() => return Ok(()),
-                msg_res = bus_rx.recv() => {
-                    match msg_res {
-                        Ok(msg) => {
-                            if !core.check_outgoing(&msg) {
-                                continue;
-                            }
+            let msg = match bus_rx.recv().await {
+                Ok(msg) => msg,
+                Err(RecvError::Lagged(n)) => {
+                    warn!("{} Sender lagged: missed {} messages", name, n);
+                    continue;
+                }
+                Err(RecvError::Closed) => break,
+            };
+            if cancel_token_for_writer_loop.is_cancelled() {
+                break;
+            }
 
-                            if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
-                                return Err(RouterError::network(&name, e));
-                            }
+            if !core.check_outgoing(&msg) {
+                continue;
+            }
 
-                            // Optimistic batching - process a fixed batch to reduce wakeups
-                            const BATCH_SIZE: usize = 1024;
-                            for _ in 0..BATCH_SIZE {
-                                match bus_rx.try_recv() {
-                                    Ok(m) => {
-                                        if core.check_outgoing(&m) {
-                                            if let Err(e) = writer.write_all(&m.serialized_bytes).await {
-                                                return Err(RouterError::network(&name, e));
-                                            }
-                                        }
-                                    }
-                                    Err(TryRecvError::Empty) => break,
-                                    Err(TryRecvError::Overflowed(n)) => {
-                                        warn!("{} Sender lagged: missed {} messages", name, n);
-                                    }
-                                    Err(TryRecvError::Closed) => return Ok(()),
-                                }
-                            }
+            if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
+                return Err(RouterError::network(&name, e));
+            }
 
-                            // Flush buffered writes; keep simple to avoid deadlocks in low traffic tests
-                            if let Err(e) = writer.flush().await {
+            // Optimistic batching - process a fixed batch to reduce wakeups
+            const BATCH_SIZE: usize = 1024;
+            for _ in 0..BATCH_SIZE {
+                match bus_rx.try_recv() {
+                    Ok(m) => {
+                        if core.check_outgoing(&m) {
+                            if let Err(e) = writer.write_all(&m.serialized_bytes).await {
                                 return Err(RouterError::network(&name, e));
                             }
                         }
-                        Err(RecvError::Overflowed(n)) => {
-                            warn!("{} Sender lagged: missed {} messages", name, n);
-                        }
-                        Err(RecvError::Closed) => return Ok(()),
                     }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Lagged(n)) => {
+                        warn!("{} Sender lagged: missed {} messages", name, n);
+                    }
+                    Err(TryRecvError::Closed) => return Ok(()),
                 }
             }
+
+            // Flush buffered writes; keep simple to avoid deadlocks in low traffic tests
+            if let Err(e) = writer.flush().await {
+                return Err(RouterError::network(&name, e));
+            }
         }
+        Ok(())
     };
 
     // Propagate errors from reader/writer loops (issue #3)

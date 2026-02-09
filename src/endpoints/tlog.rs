@@ -7,11 +7,11 @@
 
 use crate::error::{Result, RouterError};
 use crate::router::RoutedMessage;
-use async_broadcast::{Receiver, RecvError};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, File};
 use tokio::io::AsyncWriteExt;
+use tokio::sync::broadcast::{self, error::RecvError};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -43,7 +43,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// - An error occurs during writing to the TLOG file.
 pub async fn run(
     logs_dir: String,
-    mut bus_rx: Receiver<RoutedMessage>,
+    mut bus_rx: broadcast::Receiver<RoutedMessage>,
     cancel_token: CancellationToken,
 ) -> Result<()> {
     let dir = Path::new(&logs_dir);
@@ -103,7 +103,7 @@ pub async fn run(
                             return Err(RouterError::filesystem(&path_str, e));
                         }
                     }
-                    Err(RecvError::Overflowed(n)) => {
+                    Err(RecvError::Lagged(n)) => {
                         warn!("TLog Logger lagged: missed {} messages", n);
                     }
                     Err(RecvError::Closed) => break,
