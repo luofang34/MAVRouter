@@ -149,6 +149,15 @@ jobs:
             kill $(cat router.pid) || true
             rm router.pid
           fi
+      - name: Run self-managed Python tests
+        if: runner.os == 'Linux'
+        run: |
+          cd tests/integration
+          set -e
+          for test in verify_sniffer.py; do
+            echo "Running $test..."
+            timeout 120 python3 "$test"
+          done
       - name: Upload router logs
         if: always()
         uses: actions/upload-artifact@v4
