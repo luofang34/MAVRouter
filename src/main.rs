@@ -217,8 +217,16 @@ impl TerminateSignal {
 #[command(version, about, long_about = None)]
 struct Args {
     /// Path to configuration file
-    #[arg(short, long, default_value = "mavrouter.toml")]
+    #[arg(
+        short,
+        long,
+        default_value = "mavrouter.toml",
+        env = "MAVROUTER_CONF_FILE"
+    )]
     config: String,
+    /// Path to configuration directory (*.toml files merged alphabetically)
+    #[arg(long, env = "MAVROUTER_CONF_DIR")]
+    config_dir: Option<String>,
 }
 
 #[tokio::main]
@@ -234,6 +242,9 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     info!("Starting mavrouter-rs with config: {}", args.config);
+    if let Some(ref dir) = args.config_dir {
+        info!("Config directory: {}", dir);
+    }
 
     // Initialize reload signal handler
     let mut sig_hup = ReloadSignal::new()?;
@@ -248,7 +259,8 @@ async fn main() -> Result<()> {
         let config = if let Some(cfg) = next_config.take() {
             cfg
         } else {
-            match Config::load(&args.config).await {
+            match Config::load_merged(Some(args.config.as_str()), args.config_dir.as_deref()).await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     error!("Error loading config: {:#}", e);
@@ -393,7 +405,10 @@ async fn main() -> Result<()> {
                 _ = sig_hup.recv() => {
                     info!("SIGHUP received. Checking configuration for reload...");
                     // Save validated config to avoid TOCTOU race (issue #8)
-                    match Config::load(&args.config).await {
+                    match Config::load_merged(
+                        Some(args.config.as_str()),
+                        args.config_dir.as_deref(),
+                    ).await {
                         Ok(validated_config) => {
                             info!("Configuration valid. Restarting...");
                             next_config = Some(validated_config);
