@@ -154,7 +154,7 @@ jobs:
         run: |
           set -e
           echo "Running self-managed Python integration tests..."
-          for test in verify_config_dir.py verify_endpoint_stats.py; do
+          for test in verify_config_dir.py verify_endpoint_stats.py verify_filtering.py; do
             echo "Running $test..."
             timeout 120 python3 "tests/integration/$test"
           done
