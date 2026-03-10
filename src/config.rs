@@ -139,6 +139,10 @@ pub enum EndpointConfig {
         /// Filters to apply to messages passing through this endpoint.
         #[serde(flatten)]
         filters: EndpointFilters,
+        /// Optional group name for endpoint grouping (redundant links).
+        /// Endpoints in the same group share routing knowledge.
+        #[serde(default)]
+        group: Option<String>,
     },
     /// TCP endpoint configuration.
     Tcp {
@@ -150,6 +154,10 @@ pub enum EndpointConfig {
         /// Filters to apply to messages passing through this endpoint.
         #[serde(flatten)]
         filters: EndpointFilters,
+        /// Optional group name for endpoint grouping (redundant links).
+        /// Endpoints in the same group share routing knowledge.
+        #[serde(default)]
+        group: Option<String>,
     },
     /// Serial endpoint configuration.
     Serial {
@@ -163,6 +171,10 @@ pub enum EndpointConfig {
         /// Filters to apply to messages passing through this endpoint.
         #[serde(flatten)]
         filters: EndpointFilters,
+        /// Optional group name for endpoint grouping (redundant links).
+        /// Endpoints in the same group share routing knowledge.
+        #[serde(default)]
+        group: Option<String>,
     },
 }
 
@@ -187,6 +199,20 @@ pub enum FlowControl {
     Hardware,
     /// Software (XON/XOFF) flow control.
     Software,
+}
+
+impl EndpointConfig {
+    /// Returns the group name for this endpoint, if set.
+    /// Returns `None` if no group is configured or the group string is empty.
+    pub fn group(&self) -> Option<&str> {
+        let group = match self {
+            EndpointConfig::Udp { group, .. } => group.as_deref(),
+            EndpointConfig::Tcp { group, .. } => group.as_deref(),
+            EndpointConfig::Serial { group, .. } => group.as_deref(),
+        };
+        // Treat empty string as no group
+        group.filter(|g| !g.is_empty())
+    }
 }
 
 fn default_mode_server() -> EndpointMode {
@@ -453,9 +479,9 @@ impl Config {
 
             // Validate filters
             let filters = match endpoint {
-                EndpointConfig::Udp { filters, .. } => filters,
-                EndpointConfig::Tcp { filters, .. } => filters,
-                EndpointConfig::Serial { filters, .. } => filters,
+                EndpointConfig::Udp { ref filters, .. } => filters,
+                EndpointConfig::Tcp { ref filters, .. } => filters,
+                EndpointConfig::Serial { ref filters, .. } => filters,
             };
 
             // Helper closure to check msg_ids
@@ -544,6 +570,7 @@ mod tests {
                 address: "127.0.0.1:5760".to_string(),
                 mode: EndpointMode::Client,
                 filters: EndpointFilters::default(),
+                group: None,
             }],
         };
 
@@ -565,6 +592,7 @@ mod tests {
                 address: "127.0.0.1:5760".to_string(),
                 mode: EndpointMode::Server,
                 filters: EndpointFilters::default(),
+                group: None,
             }],
         };
 
@@ -610,6 +638,7 @@ mod tests {
                 baud: 100, // Too low
                 flow_control: FlowControl::None,
                 filters: EndpointFilters::default(),
+                group: None,
             }],
         };
         assert!(config.validate().is_err());
@@ -621,6 +650,7 @@ mod tests {
                 baud: 5_000_000, // Too high
                 flow_control: FlowControl::None,
                 filters: EndpointFilters::default(),
+                group: None,
             }],
         };
         assert!(config_high.validate().is_err());
@@ -635,6 +665,7 @@ mod tests {
                 baud: 115200,
                 flow_control: FlowControl::None,
                 filters: EndpointFilters::default(),
+                group: None,
             }],
         };
         assert!(config.validate().is_ok());
@@ -648,6 +679,7 @@ mod tests {
                 address: "not_an_address".to_string(),
                 mode: EndpointMode::Client,
                 filters: EndpointFilters::default(),
+                group: None,
             }],
         };
         assert!(config.validate().is_err());
@@ -678,11 +710,13 @@ mod tests {
                     address: "0.0.0.0:14550".to_string(),
                     mode: EndpointMode::Server,
                     filters: EndpointFilters::default(),
+                    group: None,
                 },
                 EndpointConfig::Tcp {
                     address: "127.0.0.1:5761".to_string(),
                     mode: EndpointMode::Client,
                     filters: EndpointFilters::default(),
+                    group: None,
                 },
             ],
         };
@@ -834,6 +868,7 @@ flow_control = "rtscts"
                 address: "0.0.0.0:14550".to_string(),
                 mode: EndpointMode::Server,
                 filters: EndpointFilters::default(),
+                group: None,
             }],
         };
 
@@ -848,6 +883,7 @@ flow_control = "rtscts"
                 address: "127.0.0.1:5762".to_string(),
                 mode: EndpointMode::Client,
                 filters: EndpointFilters::default(),
+                group: None,
             }],
         };
 
@@ -875,11 +911,13 @@ flow_control = "rtscts"
                     address: "0.0.0.0:14550".to_string(),
                     mode: EndpointMode::Server,
                     filters: EndpointFilters::default(),
+                    group: None,
                 },
                 EndpointConfig::Udp {
                     address: "0.0.0.0:14551".to_string(),
                     mode: EndpointMode::Server,
                     filters: EndpointFilters::default(),
+                    group: None,
                 },
             ],
         };
@@ -890,6 +928,7 @@ flow_control = "rtscts"
                 address: "127.0.0.1:5760".to_string(),
                 mode: EndpointMode::Client,
                 filters: EndpointFilters::default(),
+                group: None,
             }],
         };
 
@@ -1102,5 +1141,62 @@ mode = "client"
         assert_eq!(config.general.tcp_port, Some(5760));
         // Endpoints from both
         assert_eq!(config.endpoint.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_toml_with_group() {
+        let toml = r#"
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+group = "autopilot"
+
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyACM0"
+baud = 115200
+group = "autopilot"
+
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:5761"
+mode = "client"
+group = "gcs"
+"#;
+        let config = Config::from_str(toml).expect("should parse config with groups");
+        assert_eq!(config.endpoint.len(), 3);
+        assert_eq!(config.endpoint[0].group(), Some("autopilot"));
+        assert_eq!(config.endpoint[1].group(), Some("autopilot"));
+        assert_eq!(config.endpoint[2].group(), Some("gcs"));
+    }
+
+    #[test]
+    fn test_parse_toml_without_group() {
+        let toml = r#"
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:5761"
+mode = "client"
+"#;
+        let config = Config::from_str(toml).expect("should parse config without groups");
+        assert_eq!(config.endpoint.len(), 2);
+        assert_eq!(config.endpoint[0].group(), None);
+        assert_eq!(config.endpoint[1].group(), None);
+    }
+
+    #[test]
+    fn test_empty_group_string_treated_as_none() {
+        let toml = r#"
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+group = ""
+"#;
+        let config = Config::from_str(toml).expect("should parse config with empty group");
+        assert_eq!(config.endpoint[0].group(), None);
     }
 }
