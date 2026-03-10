@@ -27,8 +27,9 @@
 //! ```
 
 use crate::config::Config;
+use crate::endpoint_core::EndpointStats;
 use crate::error::{Result, RouterError};
-use crate::router::MessageBus;
+use crate::router::{EndpointId, MessageBus};
 use crate::routing::RoutingTable;
 use parking_lot::RwLock;
 use std::path::Path;
@@ -72,6 +73,7 @@ pub struct Router {
     handles: Vec<JoinHandle<()>>,
     bus: MessageBus,
     routing_table: Arc<RwLock<RoutingTable>>,
+    endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,
 }
 
 impl Router {
@@ -105,6 +107,7 @@ impl Router {
             handles: orchestrated.handles,
             bus: orchestrated.bus,
             routing_table: orchestrated.routing_table,
+            endpoint_stats: orchestrated.endpoint_stats,
         })
     }
 
@@ -180,6 +183,15 @@ impl Router {
     /// network topology.
     pub fn routing_table(&self) -> &Arc<RwLock<RoutingTable>> {
         &self.routing_table
+    }
+
+    /// Returns per-endpoint traffic statistics.
+    ///
+    /// Each entry contains the endpoint ID, a human-readable name, and
+    /// a shared reference to the atomic stats counters. Call
+    /// [`EndpointStats::snapshot`] to obtain a point-in-time view.
+    pub fn endpoint_stats(&self) -> &[(EndpointId, String, Arc<EndpointStats>)] {
+        &self.endpoint_stats
     }
 
     /// Checks if the router is still running.

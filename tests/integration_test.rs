@@ -47,6 +47,7 @@ async fn test_udp_echo() {
             f,
             t,
             300,
+            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
         )
         .await
         .unwrap();
@@ -87,6 +88,7 @@ async fn test_udp_echo() {
             dd2,
             f2,
             t2,
+            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
         )
         .await
         .unwrap();
@@ -138,6 +140,7 @@ async fn test_tcp_bidirectional() {
             dd,
             f,
             t,
+            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
         )
         .await
         .unwrap();
@@ -162,6 +165,7 @@ async fn test_tcp_bidirectional() {
             dd2,
             f2,
             t2,
+            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
         )
         .await
         .unwrap();

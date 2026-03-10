@@ -31,6 +31,7 @@ async fn test_stream_loopback() {
         dedup,
         filters,
         update_routing: true,
+        stats: std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
     };
 
     let (mut client, server) = tokio::io::duplex(4096);

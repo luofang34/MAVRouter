@@ -50,9 +50,15 @@ use tokio::net::UnixListener;
 use tokio::signal::unix::{signal, Signal, SignalKind};
 
 #[cfg(unix)]
+use crate::endpoint_core::EndpointStats;
+#[cfg(unix)]
+use crate::router::EndpointId;
+
+#[cfg(unix)]
 async fn run_stats_server(
     socket_path: String,
     routing_table: Arc<RwLock<RoutingTable>>,
+    ep_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,
     token: CancellationToken,
 ) -> crate::error::Result<()> {
     let path = Path::new(&socket_path);
@@ -86,6 +92,7 @@ async fn run_stats_server(
                 match accept_res {
                     Ok((mut stream, _addr)) => {
                         let rt = routing_table.clone();
+                        let ep_stats_clone = ep_stats.clone();
                         tokio::spawn(async move {
                             let mut buf = [0u8; 1024];
                             let n = match stream.read(&mut buf).await {
@@ -106,7 +113,24 @@ async fn run_stats_server(
                                         stats.timestamp
                                     )
                                 }
-                                "help" => "Available commands: stats, help".to_string(),
+                                "endpoint_stats" => {
+                                    let mut entries = Vec::new();
+                                    for (ep_id, ep_name, ep_st) in &ep_stats_clone {
+                                        let snap = ep_st.snapshot();
+                                        entries.push(format!(
+                                            r#"{{"id":{},"name":"{}","msgs_in":{},"msgs_out":{},"bytes_in":{},"bytes_out":{},"errors":{}}}"#,
+                                            ep_id.0,
+                                            ep_name,
+                                            snap.msgs_in,
+                                            snap.msgs_out,
+                                            snap.bytes_in,
+                                            snap.bytes_out,
+                                            snap.errors
+                                        ));
+                                    }
+                                    format!("[{}]", entries.join(","))
+                                }
+                                "help" => "Available commands: stats, endpoint_stats, help".to_string(),
                                 _ => "Unknown command. Try 'help'".to_string(),
                             };
 
@@ -252,6 +276,7 @@ async fn main() -> Result<()> {
         // Stats Reporting Task (main.rs-specific)
         let rt_stats = orchestrated.routing_table.clone();
         let stats_token = cancel_token.child_token();
+        let ep_stats_for_reporter = orchestrated.endpoint_stats.clone();
 
         let sample_interval = config.general.stats_sample_interval_secs;
         let retention = config.general.stats_retention_secs;
@@ -311,6 +336,15 @@ async fn main() -> Result<()> {
                                     );
                                 }
 
+                                // Per-endpoint stats
+                                for (ep_id, ep_name, ep_stats) in &ep_stats_for_reporter {
+                                    let snap = ep_stats.snapshot();
+                                    info!(
+                                        "Endpoint {} ({}) {}",
+                                        ep_id, ep_name, snap
+                                    );
+                                }
+
                                 last_log_time = current_timestamp;
                             }
                         }
@@ -325,6 +359,7 @@ async fn main() -> Result<()> {
             if !socket_path.is_empty() {
                 let name = format!("Stats Socket {}", socket_path);
                 let rt = orchestrated.routing_table.clone();
+                let ep_stats_for_server = orchestrated.endpoint_stats.clone();
                 let task_token = cancel_token.child_token();
                 let path = socket_path.clone();
 
@@ -333,9 +368,10 @@ async fn main() -> Result<()> {
                     task_token.clone(),
                     move || {
                         let rt = rt.clone();
+                        let ep_st = ep_stats_for_server.clone();
                         let token = task_token.clone();
                         let p = path.clone();
-                        async move { run_stats_server(p, rt, token).await }
+                        async move { run_stats_server(p, rt, ep_st, token).await }
                     },
                 )));
             }

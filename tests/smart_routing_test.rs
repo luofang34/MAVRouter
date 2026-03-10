@@ -72,6 +72,7 @@ async fn test_targeted_message_routing() {
                 dd,
                 f,
                 t,
+                std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
             )
             .await
             .unwrap();
@@ -209,6 +210,7 @@ async fn test_unknown_target_dropped() {
                 dd,
                 f,
                 t,
+                std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
             )
             .await
             .unwrap();

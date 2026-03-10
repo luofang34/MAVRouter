@@ -613,6 +613,7 @@ fn make_endpoint_core(
         dedup: ConcurrentDedup::new(dedup_period),
         filters,
         update_routing: true,
+        stats: std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
     }
 }
 
