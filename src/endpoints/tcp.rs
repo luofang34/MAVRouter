@@ -18,6 +18,10 @@ use async_broadcast::{Receiver, Sender};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+
+/// Global counter for generating unique TCP client endpoint IDs.
+/// Starts at 1_000_000 to avoid collisions with configured endpoint IDs.
+static TCP_CLIENT_ID_COUNTER: AtomicUsize = AtomicUsize::new(1_000_000);
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
@@ -83,10 +87,6 @@ pub async fn run(
 
             let mut join_set = JoinSet::new();
 
-            // Counter for generating unique endpoint IDs for each client connection
-            // Start at base_id * 1000 to avoid collisions with configured endpoints
-            let client_id_counter = Arc::new(AtomicUsize::new(id * 1000));
-
             loop {
                 tokio::select! {
                     accept_res = listener.accept() => {
@@ -94,8 +94,8 @@ pub async fn run(
                             Ok((stream, addr)) => {
                                 let _ = stream.set_nodelay(true);
 
-                                // Generate unique endpoint ID for this client connection
-                                let client_id = client_id_counter.fetch_add(1, Ordering::Relaxed);
+                                // Generate globally unique endpoint ID for this client connection
+                                let client_id = TCP_CLIENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
                                 info!("Accepted TCP connection from {} (EndpointId: {})", addr, client_id);
 
                                 // Create a unique core for this client with its own EndpointId
@@ -167,5 +167,25 @@ pub async fn run(
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tcp_client_id_counter_starts_above_configured_range() {
+        let id = TCP_CLIENT_ID_COUNTER.load(Ordering::Relaxed);
+        // Must be above any reasonable number of configured endpoints
+        assert!(id >= 1_000_000);
+    }
+
+    #[test]
+    fn test_tcp_client_id_counter_increments_uniquely() {
+        let id1 = TCP_CLIENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let id2 = TCP_CLIENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(id1, id2);
+        assert_eq!(id2, id1 + 1);
     }
 }

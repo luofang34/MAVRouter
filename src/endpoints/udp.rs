@@ -18,7 +18,6 @@ use crate::routing::RoutingTable;
 use async_broadcast::{Receiver, RecvError, Sender};
 use bytes::Bytes;
 use dashmap::DashMap;
-use futures::future::join_all;
 use mavlink::MavlinkVersion;
 use parking_lot::RwLock;
 use std::io::Cursor;
@@ -28,6 +27,26 @@ use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
+
+/// Sends packet data to either a specific target or all known clients.
+async fn send_to_targets(
+    socket: &UdpSocket,
+    data: &[u8],
+    target: Option<&SocketAddr>,
+    clients: &[SocketAddr],
+) {
+    if let Some(target) = target {
+        if let Err(e) = socket.send_to(data, target).await {
+            warn!("UDP send error to target: {}", e);
+        }
+    } else {
+        for client in clients {
+            if let Err(e) = socket.send_to(data, client).await {
+                warn!("UDP broadcast error to {}: {}", client, e);
+            }
+        }
+    }
+}
 
 /// Runs the UDP endpoint logic, continuously handling MAVLink traffic.
 ///
@@ -152,32 +171,36 @@ pub async fn run(
     let core_tx = core.clone();
 
     let send_loop = async move {
+        // Reusable buffer for client snapshot to avoid per-message allocation
+        let mut cached_targets: Vec<SocketAddr> = Vec::new();
+
         loop {
             match bus_rx_loop.recv().await {
                 Ok(msg) => {
-                    if !core_tx.check_outgoing(&msg) {
-                        continue;
+                    // Snapshot client list once per batch (reuse allocation)
+                    if target_addr.is_none() {
+                        cached_targets.clear();
+                        cached_targets.extend(clients_send.iter().map(|r| *r.key()));
                     }
 
-                    let packet_data = msg.serialized_bytes.clone();
+                    // Send first message
+                    if core_tx.check_outgoing(&msg) {
+                        send_to_targets(&s_socket, &msg.serialized_bytes, target_addr.as_ref(), &cached_targets).await;
+                    }
 
-                    if let Some(target) = target_addr {
-                        if let Err(e) = s_socket.send_to(&packet_data, target).await {
-                            warn!("UDP send error to target: {}", e);
-                        }
-                    } else {
-                        let targets: Vec<SocketAddr> =
-                            clients_send.iter().map(|r| *r.key()).collect();
-                        let sends: Vec<_> = targets
-                            .iter()
-                            .map(|client| s_socket.send_to(&packet_data, *client))
-                            .collect();
-
-                        let results = join_all(sends).await;
-                        for (client, res) in targets.into_iter().zip(results) {
-                            if let Err(e) = res {
-                                warn!("UDP broadcast error to {}: {}", client, e);
+                    // Batch: drain pending messages without blocking
+                    for _ in 0..1024 {
+                        match bus_rx_loop.try_recv() {
+                            Ok(m) => {
+                                if core_tx.check_outgoing(&m) {
+                                    send_to_targets(&s_socket, &m.serialized_bytes, target_addr.as_ref(), &cached_targets).await;
+                                }
                             }
+                            Err(async_broadcast::TryRecvError::Empty) => break,
+                            Err(async_broadcast::TryRecvError::Overflowed(n)) => {
+                                warn!("UDP Sender lagged: missed {} messages", n);
+                            }
+                            Err(async_broadcast::TryRecvError::Closed) => return,
                         }
                     }
                 }

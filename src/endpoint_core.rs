@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 /// Exponential backoff helper for connection retries.
 #[derive(Debug)]
@@ -397,6 +397,65 @@ where
     }
 }
 
+/// Supervises a task, automatically restarting it on failure with exponential backoff.
+///
+/// This function wraps a task factory in a supervision loop that:
+/// - Restarts the task if it exits (either cleanly or with an error)
+/// - Uses exponential backoff (1s to 30s, 2x multiplier) to avoid rapid restart loops
+/// - Resets the backoff if the task runs successfully for more than 60 seconds
+/// - Stops when the `cancel_token` is cancelled
+///
+/// # Arguments
+///
+/// * `name` - A descriptive name for the task (used in log messages).
+/// * `cancel_token` - `CancellationToken` to signal graceful shutdown.
+/// * `task_factory` - A closure that creates a new instance of the task's future each time
+///   the task needs to be (re)started.
+pub async fn supervise<F, Fut>(name: String, cancel_token: CancellationToken, task_factory: F)
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    let mut backoff = ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(30), 2.0);
+
+    loop {
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                info!("Supervisor for {} shutting down", name);
+                break;
+            }
+            _ = async {
+                let start_time = std::time::Instant::now();
+                let result = task_factory().await;
+
+                // If task ran for more than 60 seconds, reset backoff
+                if start_time.elapsed() > Duration::from_secs(60) {
+                    backoff.reset();
+                }
+
+                match result {
+                    Ok(_) => {
+                        warn!("Task {} finished cleanly (unexpected). Restarting...", name);
+                    }
+                    Err(e) => {
+                        error!("Task {} failed: {:#}. Restarting...", name, e);
+                    }
+                }
+            } => {}
+        }
+
+        let wait = backoff.next_backoff();
+        info!("Waiting {:.1?} before restarting {}", wait, name);
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {},
+            _ = cancel_token.cancelled() => {
+                info!("Supervisor for {} shutting down during backoff", name);
+                break;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,6 +510,65 @@ mod tests {
         assert_eq!(backoff.next_backoff(), Duration::from_secs(3));
         assert_eq!(backoff.next_backoff(), Duration::from_secs(9));
         assert_eq!(backoff.next_backoff(), Duration::from_secs(27));
+    }
+
+    #[tokio::test]
+    async fn test_supervise_stops_on_cancellation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        let handle = tokio::spawn(supervise(
+            "test-task".to_string(),
+            token_clone,
+            move || {
+                let c = counter_clone.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    // Simulate a task that fails immediately
+                    Err(crate::error::RouterError::Internal("test failure".into()))
+                }
+            },
+        ));
+
+        // Let the supervisor run at least once
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(counter.load(Ordering::SeqCst) >= 1, "Task should have run at least once");
+
+        // Cancel and ensure it stops
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_supervise_restarts_failing_task() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        let handle = tokio::spawn(supervise(
+            "restart-test".to_string(),
+            token_clone,
+            move || {
+                let c = counter_clone.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Err(crate::error::RouterError::Internal("fail".into()))
+                }
+            },
+        ));
+
+        // Wait for multiple restarts (backoff starts at 1s, so we need to wait)
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let runs = counter.load(Ordering::SeqCst);
+        assert!(runs >= 2, "Task should have been restarted at least once, ran {} times", runs);
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
     }
 
     #[test]

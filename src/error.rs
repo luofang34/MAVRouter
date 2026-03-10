@@ -93,15 +93,8 @@ impl From<anyhow::Error> for RouterError {
     }
 }
 
-/// Convert from std::io::Error
-impl From<io::Error> for RouterError {
-    fn from(err: io::Error) -> Self {
-        Self::Network {
-            endpoint: "unknown".to_string(),
-            source: err,
-        }
-    }
-}
+// Note: No blanket From<io::Error> impl — callers must use
+// RouterError::network() or RouterError::filesystem() for proper context.
 
 /// Convert from tokio_serial::Error
 impl From<tokio_serial::Error> for RouterError {
@@ -138,13 +131,6 @@ mod tests {
         let err = RouterError::filesystem("/var/log/test.log", io_err);
         assert!(matches!(err, RouterError::Filesystem { .. }));
         assert!(err.to_string().contains("/var/log/test.log"));
-    }
-
-    #[test]
-    fn test_io_error_conversion() {
-        let io_err = io::Error::new(io::ErrorKind::BrokenPipe, "broken");
-        let router_err: RouterError = io_err.into();
-        assert!(matches!(router_err, RouterError::Network { .. }));
     }
 
     #[test]
