@@ -241,6 +241,50 @@ mode = "server"
     }
 
     #[tokio::test]
+    async fn test_router_endpoint_stats() {
+        let toml = r#"
+[[endpoint]]
+type = "udp"
+address = "127.0.0.1:24560"
+mode = "server"
+
+[[endpoint]]
+type = "udp"
+address = "127.0.0.1:24561"
+mode = "server"
+"#;
+        let router = Router::from_str(toml).await.expect("should start");
+        let stats = router.endpoint_stats();
+        // Should have at least 2 entries for our 2 endpoints
+        assert!(
+            stats.len() >= 2,
+            "expected at least 2 endpoint stats entries, got {}",
+            stats.len()
+        );
+        router.stop().await;
+    }
+
+    #[tokio::test]
+    async fn test_router_is_running() {
+        let toml = r#"
+[[endpoint]]
+type = "udp"
+address = "127.0.0.1:24562"
+mode = "server"
+"#;
+        let router = Router::from_str(toml).await.expect("should start");
+        assert!(router.is_running(), "router should be running after start");
+
+        // Obtain a token clone before stopping
+        let token = router.cancel_token();
+        assert!(!token.is_cancelled());
+
+        router.stop().await;
+        // After stop, the token should be cancelled
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
     async fn test_router_routing_table_access() {
         let toml = r#"
 [[endpoint]]

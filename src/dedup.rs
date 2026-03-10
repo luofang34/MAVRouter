@@ -313,9 +313,102 @@ impl Dedup {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::thread;
+
+    #[allow(clippy::unwrap_used)]
+    #[test]
+    fn test_concurrent_dedup_basic() {
+        let cd = ConcurrentDedup::new(Duration::from_millis(500));
+        let msg = b"hello_concurrent";
+
+        // First insert should not be a duplicate
+        assert!(!cd.check_and_insert(msg));
+        // Second insert of same message should be a duplicate
+        assert!(cd.check_and_insert(msg));
+
+        // A different message should not be a duplicate
+        let msg2 = b"different_message";
+        assert!(!cd.check_and_insert(msg2));
+    }
+
+    #[test]
+    fn test_concurrent_dedup_disabled_when_zero_period() {
+        let cd = ConcurrentDedup::new(Duration::ZERO);
+        let msg = b"zero_period_msg";
+
+        // Nothing should ever be duplicate when period is zero
+        assert!(!cd.check_and_insert(msg));
+        assert!(!cd.check_and_insert(msg));
+        assert!(!cd.check_and_insert(msg));
+    }
+
+    #[test]
+    fn test_concurrent_dedup_rotate_buckets() {
+        let cd = ConcurrentDedup::new(Duration::from_millis(200)); // 2 buckets
+        let msg = b"rotate_test";
+
+        assert!(!cd.check_and_insert(msg));
+        assert!(cd.check_and_insert(msg)); // duplicate
+
+        // Rotate once — entry is still in the old bucket
+        cd.rotate_buckets();
+        assert!(cd.check_and_insert(msg)); // still duplicate
+
+        // Rotate again — original bucket is now cleared
+        cd.rotate_buckets();
+        assert!(!cd.check_and_insert(msg)); // no longer duplicate
+    }
+
+    #[allow(clippy::unwrap_used)]
+    #[test]
+    fn test_concurrent_dedup_cross_thread() {
+        let cd = ConcurrentDedup::new(Duration::from_secs(5));
+        let cd_arc = Arc::new(cd);
+        let msg = b"cross_thread_msg";
+
+        // Spawn threads that all try to insert the same message
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let cd_clone = Arc::clone(&cd_arc);
+            let m = msg.to_vec();
+            handles.push(thread::spawn(move || cd_clone.check_and_insert(&m)));
+        }
+
+        let results: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // Exactly one thread should see it as non-duplicate (false),
+        // all others should see it as duplicate (true)
+        let non_dup_count = results.iter().filter(|&&r| !r).count();
+        assert_eq!(
+            non_dup_count, 1,
+            "Exactly one thread should insert the message as new"
+        );
+    }
+
+    #[test]
+    fn test_concurrent_dedup_different_messages_not_duplicate() {
+        let cd = ConcurrentDedup::new(Duration::from_secs(1));
+
+        for i in 0..20u8 {
+            let msg = [i; 4];
+            assert!(
+                !cd.check_and_insert(&msg),
+                "Message {i} should not be a duplicate on first insert"
+            );
+        }
+    }
+
+    #[test]
+    fn test_concurrent_dedup_rotation_interval() {
+        let cd = ConcurrentDedup::new(Duration::from_millis(500));
+        assert_eq!(cd.rotation_interval(), Duration::from_millis(100));
+
+        let cd_zero = ConcurrentDedup::new(Duration::ZERO);
+        assert_eq!(cd_zero.rotation_interval(), Duration::ZERO);
+    }
 
     #[test]
     fn test_dedup_time_wheel() {
