@@ -13,6 +13,7 @@ use crate::filter::EndpointFilters;
 use crate::router::{create_bus, EndpointId, MessageBus};
 use crate::routing::RoutingTable;
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -249,7 +250,8 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 let stats = Arc::new(EndpointStats::new());
                 endpoint_stats.push((EndpointId(i), name.clone(), stats.clone()));
                 let device = device.clone();
-                let baud = *baud;
+                let bauds: Vec<u32> = baud.rates().to_vec();
+                let baud_index = Arc::new(AtomicUsize::new(0));
                 let serial_flow_control = match flow_control {
                     crate::config::FlowControl::None => tokio_serial::FlowControl::None,
                     crate::config::FlowControl::Hardware => tokio_serial::FlowControl::Hardware,
@@ -261,10 +263,12 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                     name,
                     task_token.clone(),
                     move || {
+                        let idx = baud_index.fetch_add(1, Ordering::Relaxed);
+                        let current_baud = bauds[idx % bauds.len()];
                         crate::endpoints::serial::run(
                             i,
                             device.clone(),
-                            baud,
+                            current_baud,
                             serial_flow_control,
                             bus_tx.clone(),
                             bus.subscribe(),
