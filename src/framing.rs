@@ -302,6 +302,70 @@ mod tests {
     }
 
     #[test]
+    fn test_max_buffer_size_overflow() {
+        let mut parser = StreamParser::new();
+
+        // Push more than MAX_BUFFER_SIZE bytes of non-MAVLink data
+        // The buffer should not grow unboundedly
+        let chunk = vec![0xAA; 128 * 1024]; // 128KB chunks of non-STX data
+        for _ in 0..10 {
+            // 10 * 128KB = 1.28MB > 1MB MAX_BUFFER_SIZE
+            parser.push(&chunk);
+        }
+
+        // The buffer length should be capped at MAX_BUFFER_SIZE
+        assert!(
+            parser.buffer.len() <= MAX_BUFFER_SIZE,
+            "Buffer should not exceed MAX_BUFFER_SIZE, got {}",
+            parser.buffer.len()
+        );
+
+        // After parse_next with no STX bytes, buffer should be cleared
+        assert!(parser.parse_next().is_none());
+    }
+
+    #[test]
+    fn test_interleaved_v1_v2() {
+        // Verify that the parser correctly extracts frames when V1 and V2
+        // packets are concatenated in a single byte stream.
+        let mut parser = StreamParser::new();
+        let header_a = MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 10,
+        };
+        let header_b = MavHeader {
+            system_id: 2,
+            component_id: 2,
+            sequence: 20,
+        };
+        let msg = MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
+
+        // Write V2, then V1 separately and push both into the parser
+        let mut buf_v2 = Vec::new();
+        mavlink::write_v2_msg(&mut buf_v2, header_a, &msg).expect("write V2");
+        let mut buf_v1 = Vec::new();
+        mavlink::write_v1_msg(&mut buf_v1, header_b, &msg).expect("write V1");
+
+        // Push both complete frames
+        parser.push(&buf_v2);
+        parser.push(&buf_v1);
+
+        // First frame should be V2 (starts with 0xFD)
+        let f1 = parser.parse_next().expect("should parse V2 frame");
+        assert_eq!(f1.version, MavlinkVersion::V2);
+        assert_eq!(f1.header.system_id, 1);
+        assert_eq!(f1.message.message_id(), 0); // HEARTBEAT
+
+        // Second frame: V1 standalone (starts with 0xFE)
+        let f2 = parser.parse_next().expect("should parse V1 frame");
+        assert_eq!(f2.header.system_id, 2);
+        assert_eq!(f2.message.message_id(), 0); // HEARTBEAT
+
+        assert!(parser.parse_next().is_none());
+    }
+
+    #[test]
     fn test_default_trait() {
         let parser = StreamParser::default();
         assert!(parser.buffer.is_empty());
