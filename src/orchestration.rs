@@ -52,6 +52,11 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
         }
     }
 
+    // Register sniffer system IDs
+    if !config.general.sniffer_sysids.is_empty() {
+        rt.set_sniffer_sysids(&config.general.sniffer_sysids);
+    }
+
     let routing_table = Arc::new(RwLock::new(rt));
     let mut handles = Vec::new();
     let mut endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)> = Vec::new();

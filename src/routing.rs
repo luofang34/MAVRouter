@@ -37,6 +37,8 @@ pub struct RoutingTable {
     endpoint_groups: HashMap<EndpointId, String>,
     /// Reverse lookup: group name -> set of endpoint IDs in that group.
     group_members: HashMap<String, HashSet<EndpointId>>,
+    /// Set of system IDs that trigger sniffer mode.
+    sniffer_sysids: HashSet<u8>,
 }
 
 impl Default for RoutingTable {
@@ -67,6 +69,7 @@ impl RoutingTable {
             endpoint_counts: HashMap::new(),
             endpoint_groups: HashMap::new(),
             group_members: HashMap::new(),
+            sniffer_sysids: HashSet::new(),
         }
     }
 
@@ -96,6 +99,31 @@ impl RoutingTable {
         };
         // Check if any endpoint in the route entry is a member of our group
         endpoints.iter().any(|ep| members.contains(ep))
+    }
+
+    /// Returns the set of endpoint IDs that have seen the given system ID.
+    /// Returns None if the system is unknown.
+    #[allow(dead_code)]
+    pub fn endpoints_for_system(&self, sysid: u8) -> Option<&HashSet<EndpointId>> {
+        self.sys_routes.get(&sysid).map(|e| &e.endpoints)
+    }
+
+    /// Sets the system IDs that trigger sniffer mode.
+    pub fn set_sniffer_sysids(&mut self, sysids: &[u8]) {
+        self.sniffer_sysids = sysids.iter().copied().collect();
+    }
+
+    /// Checks if this endpoint should receive all traffic due to sniffer mode.
+    /// Returns true if any sniffer system ID has been seen on this endpoint.
+    pub fn is_sniffer_endpoint(&self, endpoint_id: EndpointId) -> bool {
+        for &sysid in &self.sniffer_sysids {
+            if let Some(entry) = self.sys_routes.get(&sysid) {
+                if entry.endpoints.contains(&endpoint_id) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Updates the routing table with a new observation.
@@ -276,6 +304,11 @@ impl RoutingTable {
         target_sysid: u8,
         target_compid: u8,
     ) -> bool {
+        // Sniffer mode: if this endpoint has seen a sniffer system ID, forward everything
+        if self.is_sniffer_endpoint(endpoint_id) {
+            return true;
+        }
+
         if target_sysid == 0 {
             // MAV_BROADCAST_SYSTEM_ID
             return true;
@@ -494,6 +527,71 @@ mod tests {
         // Component broadcast (compid=0) to system 1 should work for group members
         assert!(rt.should_send(ep0, 1, 0));
         assert!(rt.should_send(ep1, 1, 0));
+    }
+
+    #[test]
+    fn test_sniffer_mode_receives_all() {
+        let mut rt = RoutingTable::new();
+        let ep0 = EndpointId(0);
+        let ep1 = EndpointId(1);
+
+        rt.set_sniffer_sysids(&[253]);
+
+        let now = Instant::now();
+        // ep0 has seen sniffer sysid 253
+        rt.update(ep0, 253, 1, now);
+        // ep1 has seen normal sysid 1
+        rt.update(ep1, 1, 1, now);
+
+        // ep0 should receive ALL traffic (sniffer mode)
+        assert!(rt.should_send(ep0, 1, 1));
+        assert!(rt.should_send(ep0, 2, 5));
+        assert!(rt.should_send(ep0, 99, 99));
+        assert!(rt.should_send(ep0, 0, 0)); // broadcast too
+    }
+
+    #[test]
+    fn test_sniffer_mode_no_effect_without_sysid() {
+        let mut rt = RoutingTable::new();
+        let ep0 = EndpointId(0);
+        let ep1 = EndpointId(1);
+
+        rt.set_sniffer_sysids(&[253]);
+
+        let now = Instant::now();
+        // ep0 has NOT seen sysid 253, only normal sysid 1
+        rt.update(ep0, 1, 1, now);
+        rt.update(ep1, 2, 1, now);
+
+        // ep0 should follow normal routing (not a sniffer)
+        assert!(rt.should_send(ep0, 1, 1)); // has route
+        assert!(!rt.should_send(ep0, 2, 1)); // no route
+        assert!(!rt.should_send(ep0, 99, 1)); // unknown system
+    }
+
+    #[test]
+    fn test_sniffer_and_normal_endpoints_coexist() {
+        let mut rt = RoutingTable::new();
+        let ep_sniffer = EndpointId(0);
+        let ep_normal = EndpointId(1);
+
+        rt.set_sniffer_sysids(&[253]);
+
+        let now = Instant::now();
+        // Sniffer endpoint has seen sniffer sysid
+        rt.update(ep_sniffer, 253, 1, now);
+        // Normal endpoint has seen sysid 1
+        rt.update(ep_normal, 1, 1, now);
+
+        // Sniffer gets everything
+        assert!(rt.should_send(ep_sniffer, 1, 1));
+        assert!(rt.should_send(ep_sniffer, 2, 5));
+        assert!(rt.should_send(ep_sniffer, 99, 99));
+
+        // Normal endpoint only gets routed traffic
+        assert!(rt.should_send(ep_normal, 1, 1)); // has route
+        assert!(!rt.should_send(ep_normal, 2, 5)); // no route
+        assert!(!rt.should_send(ep_normal, 99, 99)); // unknown
     }
 
     #[test]
