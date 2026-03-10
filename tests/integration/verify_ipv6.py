@@ -21,6 +21,10 @@ import threading
 
 from pymavlink import mavutil
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.join(SCRIPT_DIR, '..', '..')
+BINARY = os.path.join(REPO_ROOT, 'target', 'release', 'mavrouter')
+
 
 def ipv6_available():
     """Check if IPv6 loopback is available on this system."""
@@ -83,7 +87,7 @@ mode = "server"
         # Step 2: Start router
         print("\n[2/6] Starting router...")
         proc = subprocess.Popen(
-            ['./target/release/mavrouter', '--config', config_path],
+            [BINARY, '--config', config_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT
         )

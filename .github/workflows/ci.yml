@@ -152,11 +152,10 @@ jobs:
       - name: Run self-managed Python tests
         if: runner.os == 'Linux'
         run: |
-          cd tests/integration
           set -e
           for test in verify_ipv6.py; do
             echo "Running $test..."
-            timeout 120 python3 "$test"
+            timeout 120 python3 "tests/integration/$test"
           done
       - name: Upload router logs
         if: always()
