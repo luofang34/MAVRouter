@@ -1267,6 +1267,151 @@ address = "0.0.0.0:14550"
     }
 
     #[test]
+    fn test_sniffer_sysids_single_value() {
+        let toml = r#"
+[general]
+sniffer_sysids = [253]
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+"#;
+        let config = Config::from_str(toml).expect("should parse config with single sniffer_sysid");
+        assert_eq!(config.general.sniffer_sysids, vec![253]);
+    }
+
+    #[test]
+    fn test_sniffer_sysids_many_values() {
+        let toml = r#"
+[general]
+sniffer_sysids = [253, 254, 255]
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+"#;
+        let config = Config::from_str(toml).expect("should parse config with many sniffer_sysids");
+        assert_eq!(config.general.sniffer_sysids, vec![253, 254, 255]);
+    }
+
+    #[test]
+    fn test_sniffer_sysids_merge_overlay_overrides_base() {
+        let base = Config {
+            general: GeneralConfig {
+                sniffer_sysids: vec![253],
+                ..Default::default()
+            },
+            endpoint: vec![],
+        };
+
+        let overlay = Config {
+            general: GeneralConfig {
+                sniffer_sysids: vec![254, 255],
+                ..Default::default()
+            },
+            endpoint: vec![],
+        };
+
+        let merged = base.merge(overlay);
+        // Overlay's sniffer_sysids should completely replace base
+        assert_eq!(merged.general.sniffer_sysids, vec![254, 255]);
+    }
+
+    #[test]
+    fn test_sniffer_sysids_merge_overlay_empty_replaces_base() {
+        let base = Config {
+            general: GeneralConfig {
+                sniffer_sysids: vec![253, 254],
+                ..Default::default()
+            },
+            endpoint: vec![],
+        };
+
+        let overlay = Config {
+            general: GeneralConfig {
+                // sniffer_sysids defaults to empty vec
+                ..Default::default()
+            },
+            endpoint: vec![],
+        };
+
+        let merged = base.merge(overlay);
+        // Overlay's empty default should replace base (last-file-wins for non-Option fields)
+        assert!(merged.general.sniffer_sysids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_load_dir_preserves_sniffer_sysids() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        std::fs::write(
+            dir.path().join("00-base.toml"),
+            r#"
+[general]
+sniffer_sysids = [253]
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+"#,
+        )
+        .expect("write base");
+
+        // Second file does not mention sniffer_sysids, so its default (empty) wins
+        std::fs::write(
+            dir.path().join("10-endpoints.toml"),
+            r#"
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:5761"
+mode = "client"
+"#,
+        )
+        .expect("write endpoints");
+
+        let config = Config::load_dir(dir.path()).await.expect("load dir");
+        // Last-file-wins: the second file's default empty vec replaces the first
+        assert!(
+            config.general.sniffer_sysids.is_empty(),
+            "last-file-wins: second file with default empty sniffer_sysids should replace base"
+        );
+        assert_eq!(config.endpoint.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_load_dir_last_file_sniffer_sysids_wins() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        std::fs::write(
+            dir.path().join("00-base.toml"),
+            r#"
+[general]
+sniffer_sysids = [253]
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+"#,
+        )
+        .expect("write base");
+
+        std::fs::write(
+            dir.path().join("10-override.toml"),
+            r#"
+[general]
+sniffer_sysids = [254, 255]
+"#,
+        )
+        .expect("write override");
+
+        let config = Config::load_dir(dir.path()).await.expect("load dir");
+        // Last file's sniffer_sysids should win
+        assert_eq!(config.general.sniffer_sysids, vec![254, 255]);
+    }
+
+    #[test]
     fn test_broadcast_timeout_secs_default() {
         let toml = r#"
 [[endpoint]]

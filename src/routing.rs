@@ -595,6 +595,215 @@ mod tests {
     }
 
     #[test]
+    fn test_is_sniffer_endpoint_false_when_no_sniffer_sysids() {
+        let mut rt = RoutingTable::new();
+        let ep0 = EndpointId(0);
+
+        // No sniffer sysids configured (default)
+        let now = Instant::now();
+        rt.update(ep0, 1, 1, now);
+
+        assert!(
+            !rt.is_sniffer_endpoint(ep0),
+            "should not be sniffer when no sniffer_sysids configured"
+        );
+    }
+
+    #[test]
+    fn test_is_sniffer_endpoint_false_when_sysid_on_other_endpoint() {
+        let mut rt = RoutingTable::new();
+        let ep0 = EndpointId(0);
+        let ep1 = EndpointId(1);
+
+        rt.set_sniffer_sysids(&[253]);
+
+        let now = Instant::now();
+        // Sniffer sysid 253 seen on ep1, NOT ep0
+        rt.update(ep1, 253, 1, now);
+        rt.update(ep0, 1, 1, now);
+
+        assert!(
+            !rt.is_sniffer_endpoint(ep0),
+            "ep0 should not be sniffer when sniffer sysid is only on ep1"
+        );
+        assert!(
+            rt.is_sniffer_endpoint(ep1),
+            "ep1 should be sniffer since it has seen sniffer sysid 253"
+        );
+    }
+
+    #[test]
+    fn test_is_sniffer_endpoint_multiple_sniffer_sysids_any_match() {
+        let mut rt = RoutingTable::new();
+        let ep0 = EndpointId(0);
+        let ep1 = EndpointId(1);
+
+        rt.set_sniffer_sysids(&[253, 254, 255]);
+
+        let now = Instant::now();
+        // ep0 has only seen sysid 254 (one of the sniffer sysids)
+        rt.update(ep0, 254, 1, now);
+        // ep1 has seen sysid 255 (another sniffer sysid)
+        rt.update(ep1, 255, 1, now);
+
+        assert!(
+            rt.is_sniffer_endpoint(ep0),
+            "ep0 should be sniffer since it has seen sysid 254"
+        );
+        assert!(
+            rt.is_sniffer_endpoint(ep1),
+            "ep1 should be sniffer since it has seen sysid 255"
+        );
+    }
+
+    #[test]
+    fn test_sniffer_endpoint_receives_broadcast_traffic() {
+        let mut rt = RoutingTable::new();
+        let ep0 = EndpointId(0);
+
+        rt.set_sniffer_sysids(&[253]);
+
+        let now = Instant::now();
+        rt.update(ep0, 253, 1, now);
+
+        // Broadcast traffic (sysid=0) should be received by sniffer endpoint
+        assert!(
+            rt.should_send(ep0, 0, 0),
+            "sniffer endpoint should receive broadcast traffic"
+        );
+    }
+
+    #[test]
+    fn test_sniffer_endpoint_receives_unknown_system_traffic() {
+        let mut rt = RoutingTable::new();
+        let ep_sniffer = EndpointId(0);
+        let ep_normal = EndpointId(1);
+
+        rt.set_sniffer_sysids(&[253]);
+
+        let now = Instant::now();
+        rt.update(ep_sniffer, 253, 1, now);
+        rt.update(ep_normal, 1, 1, now);
+
+        // Traffic for unknown system 42 -- normally dropped
+        assert!(
+            !rt.should_send(ep_normal, 42, 1),
+            "normal endpoint should NOT receive traffic for unknown system"
+        );
+        assert!(
+            rt.should_send(ep_sniffer, 42, 1),
+            "sniffer endpoint should receive traffic for unknown system"
+        );
+    }
+
+    #[test]
+    fn test_sniffer_endpoint_receives_traffic_targeted_at_other_endpoints() {
+        let mut rt = RoutingTable::new();
+        let ep_sniffer = EndpointId(0);
+        let ep_normal = EndpointId(1);
+        let ep_other = EndpointId(2);
+
+        rt.set_sniffer_sysids(&[253]);
+
+        let now = Instant::now();
+        rt.update(ep_sniffer, 253, 1, now);
+        rt.update(ep_normal, 1, 1, now);
+        rt.update(ep_other, 2, 1, now);
+
+        // Traffic targeted at system 2 (on ep_other) should also go to sniffer
+        assert!(
+            rt.should_send(ep_sniffer, 2, 1),
+            "sniffer endpoint should receive traffic targeted at other endpoints"
+        );
+        // But normal ep_normal should NOT get system 2 traffic
+        assert!(
+            !rt.should_send(ep_normal, 2, 1),
+            "normal endpoint should NOT receive traffic for system on another endpoint"
+        );
+    }
+
+    #[test]
+    fn test_sniffer_endpoint_loses_status_after_prune() {
+        let mut rt = RoutingTable::new();
+        let ep0 = EndpointId(0);
+
+        rt.set_sniffer_sysids(&[253]);
+
+        // Use a time far in the past so it will be pruned
+        let old_time = Instant::now() - Duration::from_secs(600);
+        rt.update(ep0, 253, 1, old_time);
+
+        assert!(
+            rt.is_sniffer_endpoint(ep0),
+            "ep0 should be sniffer before pruning"
+        );
+
+        // Prune with a 300-second TTL; the 600-second-old entry should be removed
+        rt.prune(Duration::from_secs(300));
+
+        assert!(
+            !rt.is_sniffer_endpoint(ep0),
+            "ep0 should lose sniffer status after its sniffer sysid entry is pruned"
+        );
+    }
+
+    #[test]
+    fn test_endpoints_for_system_returns_none_for_unknown() {
+        let rt = RoutingTable::new();
+        assert!(
+            rt.endpoints_for_system(42).is_none(),
+            "should return None for unknown system"
+        );
+    }
+
+    #[test]
+    fn test_endpoints_for_system_returns_correct_endpoints() {
+        let mut rt = RoutingTable::new();
+        let ep0 = EndpointId(0);
+        let ep1 = EndpointId(1);
+
+        let now = Instant::now();
+        rt.update(ep0, 1, 1, now);
+        rt.update(ep1, 1, 2, now);
+
+        let endpoints = rt
+            .endpoints_for_system(1)
+            .expect("system 1 should be known");
+        assert!(endpoints.contains(&ep0));
+        assert!(endpoints.contains(&ep1));
+        assert_eq!(endpoints.len(), 2);
+
+        // System 2 is unknown
+        assert!(rt.endpoints_for_system(2).is_none());
+    }
+
+    #[test]
+    fn test_set_sniffer_sysids_empty_disables_sniffer() {
+        let mut rt = RoutingTable::new();
+        let ep0 = EndpointId(0);
+
+        // First configure sniffer mode
+        rt.set_sniffer_sysids(&[253]);
+        let now = Instant::now();
+        rt.update(ep0, 253, 1, now);
+        assert!(
+            rt.is_sniffer_endpoint(ep0),
+            "ep0 should be sniffer after configuring sniffer sysids"
+        );
+
+        // Now clear sniffer sysids
+        rt.set_sniffer_sysids(&[]);
+        assert!(
+            !rt.is_sniffer_endpoint(ep0),
+            "ep0 should NOT be sniffer after clearing sniffer sysids"
+        );
+
+        // Verify normal routing applies: ep0 should only get traffic for systems it knows
+        assert!(rt.should_send(ep0, 253, 1)); // has direct route
+        assert!(!rt.should_send(ep0, 99, 1)); // unknown system, no longer sniffer
+    }
+
+    #[test]
     fn test_basic_routing_without_groups() {
         let mut rt = RoutingTable::new();
         let ep0 = EndpointId(0);
