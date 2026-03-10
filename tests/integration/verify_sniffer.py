@@ -25,6 +25,10 @@ import threading
 
 from pymavlink import mavutil
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.join(SCRIPT_DIR, '..', '..')
+BINARY = os.path.join(REPO_ROOT, 'target', 'release', 'mavrouter')
+
 
 def wait_for_tcp(host, port, timeout=10):
     start = time.time()
@@ -71,7 +75,7 @@ mode = "server"
         # Step 2: Start router
         print("\n[2/7] Starting router...")
         proc = subprocess.Popen(
-            ['./target/release/mavrouter', '--config', config_path],
+            [BINARY, '--config', config_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT
         )
