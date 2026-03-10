@@ -26,6 +26,11 @@ if sys.platform == 'win32':
 
 from pymavlink import mavutil
 
+# Resolve binary path relative to this script (repo_root/target/release/mavrouter)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.join(SCRIPT_DIR, '..', '..')
+BINARY = os.path.join(REPO_ROOT, 'target', 'release', 'mavrouter')
+
 
 def wait_for_tcp(host, port, timeout=10):
     start = time.time()
@@ -89,7 +94,7 @@ mode = "server"
         # Step 2: Start router
         print("\n[2/6] Starting router...")
         proc = subprocess.Popen(
-            ['./target/release/mavrouter', '--config', config_path],
+            [BINARY, '--config', config_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT
         )

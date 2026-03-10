@@ -19,6 +19,11 @@ import socket
 
 from pymavlink import mavutil
 
+# Resolve binary path relative to this script (repo_root/target/release/mavrouter)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.join(SCRIPT_DIR, '..', '..')
+BINARY = os.path.join(REPO_ROOT, 'target', 'release', 'mavrouter')
+
 
 def wait_for_tcp(host, port, timeout=10):
     """Wait for TCP port to become available"""
@@ -92,7 +97,7 @@ bus_capacity = 3000
 
         print("\n[2/5] Starting router with --config-dir...")
         proc = subprocess.Popen(
-            ['./target/release/mavrouter', '--config', base_config, '--config-dir', config_dir],
+            [BINARY, '--config', base_config, '--config-dir', config_dir],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT
         )
