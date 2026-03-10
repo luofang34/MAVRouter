@@ -37,6 +37,15 @@ use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
+/// Returns the appropriate local bind address for a UDP client based on the target address family.
+fn client_bind_addr(target: &SocketAddr) -> &'static str {
+    if target.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    }
+}
+
 /// Checks whether a `SocketAddr` is a broadcast address.
 ///
 /// Returns `true` for IPv4 addresses where the host part is all 1s:
@@ -122,7 +131,7 @@ pub async fn run(
         let target = addrs.next().ok_or_else(|| {
             RouterError::config(format!("Could not resolve remote address '{}'", address))
         })?;
-        ("0.0.0.0:0".to_string(), Some(target))
+        (client_bind_addr(&target).to_string(), Some(target))
     };
 
     let socket = UdpSocket::bind(&bind_addr)
@@ -331,6 +340,7 @@ pub async fn run(
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -412,6 +422,50 @@ mod tests {
                 _ => broadcast_addr,
             };
             assert_eq!(send_addr, broadcast_addr);
+        }
+    }
+
+    #[test]
+    fn test_client_bind_addr_ipv4() {
+        let target: SocketAddr = "192.168.1.1:14550".parse().unwrap();
+        assert_eq!(client_bind_addr(&target), "0.0.0.0:0");
+    }
+
+    #[test]
+    fn test_client_bind_addr_ipv6() {
+        let target: SocketAddr = "[::1]:14550".parse().unwrap();
+        assert_eq!(client_bind_addr(&target), "[::]:0");
+    }
+
+    #[test]
+    fn test_ipv4_target_detection() {
+        let addr: SocketAddr = "127.0.0.1:14550".parse().unwrap();
+        assert!(addr.is_ipv4());
+    }
+
+    #[test]
+    fn test_ipv6_target_detection() {
+        let addr: SocketAddr = "[::1]:14550".parse().unwrap();
+        assert!(addr.is_ipv6());
+    }
+
+    #[test]
+    fn test_is_broadcast_addr_ipv6_not_broadcast() {
+        let addr: SocketAddr = "[fe80::1]:14550".parse().unwrap();
+        assert!(!is_broadcast_addr(&addr));
+    }
+
+    #[tokio::test]
+    async fn test_udp_ipv6_bind() {
+        // Try to bind to IPv6 - skip test if not supported
+        match tokio::net::UdpSocket::bind("[::]:0").await {
+            Ok(sock) => {
+                let addr = sock.local_addr().unwrap();
+                assert!(addr.is_ipv6());
+            }
+            Err(_) => {
+                // IPv6 not available in this environment, skip
+            }
         }
     }
 }
