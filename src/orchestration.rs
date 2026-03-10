@@ -42,7 +42,16 @@ pub struct OrchestratedRouter {
 /// - All configured endpoints (UDP, TCP, Serial) with supervisors
 pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> OrchestratedRouter {
     let bus = create_bus(config.general.bus_capacity);
-    let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
+    let mut rt = RoutingTable::new();
+
+    // Register endpoint groups for redundant link support
+    for (i, endpoint_config) in config.endpoint.iter().enumerate() {
+        if let Some(group) = endpoint_config.group() {
+            rt.set_endpoint_group(crate::router::EndpointId(i), group.to_string());
+        }
+    }
+
+    let routing_table = Arc::new(RwLock::new(rt));
     let mut handles = Vec::new();
     let mut endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)> = Vec::new();
 
@@ -164,6 +173,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 address,
                 mode,
                 filters,
+                ..
             } => {
                 let name = format!("UDP Endpoint {} ({})", i, address);
                 let stats = Arc::new(EndpointStats::new());
@@ -197,6 +207,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 address,
                 mode,
                 filters,
+                ..
             } => {
                 let name = format!("TCP Endpoint {} ({})", i, address);
                 let stats = Arc::new(EndpointStats::new());
@@ -229,6 +240,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 baud,
                 flow_control,
                 filters,
+                ..
             } => {
                 let name = format!("Serial Endpoint {} ({})", i, device);
                 let stats = Arc::new(EndpointStats::new());
