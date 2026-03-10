@@ -123,6 +123,9 @@ fn default_stats_sample_interval_secs() -> u64 {
 fn default_stats_log_interval_secs() -> u64 {
     60
 }
+fn default_broadcast_timeout_secs() -> u64 {
+    5
+}
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type")]
@@ -136,6 +139,11 @@ pub enum EndpointConfig {
         /// Operating mode for the UDP endpoint (client or server).
         #[serde(default = "default_mode_server")]
         mode: EndpointMode,
+        /// Timeout in seconds before reverting from unicast back to broadcast
+        /// when using a broadcast target address in client mode.
+        /// Only relevant when the target address is a broadcast address.
+        #[serde(default = "default_broadcast_timeout_secs")]
+        broadcast_timeout_secs: u64,
         /// Filters to apply to messages passing through this endpoint.
         #[serde(flatten)]
         filters: EndpointFilters,
@@ -591,6 +599,7 @@ mod tests {
             endpoint: vec![EndpointConfig::Udp {
                 address: "127.0.0.1:5760".to_string(),
                 mode: EndpointMode::Server,
+                broadcast_timeout_secs: 5,
                 filters: EndpointFilters::default(),
                 group: None,
             }],
@@ -709,6 +718,7 @@ mod tests {
                 EndpointConfig::Udp {
                     address: "0.0.0.0:14550".to_string(),
                     mode: EndpointMode::Server,
+                    broadcast_timeout_secs: 5,
                     filters: EndpointFilters::default(),
                     group: None,
                 },
@@ -867,6 +877,7 @@ flow_control = "rtscts"
             endpoint: vec![EndpointConfig::Udp {
                 address: "0.0.0.0:14550".to_string(),
                 mode: EndpointMode::Server,
+                broadcast_timeout_secs: 5,
                 filters: EndpointFilters::default(),
                 group: None,
             }],
@@ -910,12 +921,14 @@ flow_control = "rtscts"
                 EndpointConfig::Udp {
                     address: "0.0.0.0:14550".to_string(),
                     mode: EndpointMode::Server,
+                    broadcast_timeout_secs: 5,
                     filters: EndpointFilters::default(),
                     group: None,
                 },
                 EndpointConfig::Udp {
                     address: "0.0.0.0:14551".to_string(),
                     mode: EndpointMode::Server,
+                    broadcast_timeout_secs: 5,
                     filters: EndpointFilters::default(),
                     group: None,
                 },
@@ -1198,5 +1211,46 @@ group = ""
 "#;
         let config = Config::from_str(toml).expect("should parse config with empty group");
         assert_eq!(config.endpoint[0].group(), None);
+    }
+
+    #[test]
+    fn test_broadcast_timeout_secs_explicit() {
+        let toml = r#"
+[[endpoint]]
+type = "udp"
+address = "192.168.1.255:14550"
+mode = "client"
+broadcast_timeout_secs = 10
+"#;
+        let config = Config::from_str(toml).expect("should parse");
+        match &config.endpoint[0] {
+            EndpointConfig::Udp {
+                broadcast_timeout_secs,
+                ..
+            } => {
+                assert_eq!(*broadcast_timeout_secs, 10);
+            }
+            _ => panic!("Expected Udp endpoint"),
+        }
+    }
+
+    #[test]
+    fn test_broadcast_timeout_secs_default() {
+        let toml = r#"
+[[endpoint]]
+type = "udp"
+address = "192.168.1.255:14550"
+mode = "client"
+"#;
+        let config = Config::from_str(toml).expect("should parse");
+        match &config.endpoint[0] {
+            EndpointConfig::Udp {
+                broadcast_timeout_secs,
+                ..
+            } => {
+                assert_eq!(*broadcast_timeout_secs, 5);
+            }
+            _ => panic!("Expected Udp endpoint"),
+        }
     }
 }

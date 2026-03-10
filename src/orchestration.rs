@@ -173,6 +173,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 address,
                 mode,
                 filters,
+                broadcast_timeout_secs,
                 ..
             } => {
                 let name = format!("UDP Endpoint {} ({})", i, address);
@@ -182,6 +183,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 let mode = mode.clone();
                 let filters = filters.clone();
                 let cleanup_ttl = prune_ttl;
+                let bcast_timeout = *broadcast_timeout_secs;
 
                 handles.push(tokio::spawn(supervise(
                     name,
@@ -198,6 +200,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                             filters.clone(),
                             task_token.clone(),
                             cleanup_ttl,
+                            bcast_timeout,
                             stats.clone(),
                         )
                     },
