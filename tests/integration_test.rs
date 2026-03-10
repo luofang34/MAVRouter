@@ -47,6 +47,7 @@ async fn test_udp_echo() {
             f,
             t,
             300,
+            5,
             std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
         )
         .await

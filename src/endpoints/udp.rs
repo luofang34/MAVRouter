@@ -7,6 +7,13 @@
 //! In server mode, it tracks connected clients by their `SocketAddr` to allow
 //! broadcasting messages back to them. In client mode, it continuously sends
 //! to a predefined remote address.
+//!
+//! **Broadcast mode** (client mode with a broadcast target address):
+//! When the target address is a broadcast address (e.g., 192.168.1.255 or
+//! 255.255.255.255), the endpoint starts by sending to the broadcast address.
+//! Once a unicast peer responds, it switches to sending directly to that peer.
+//! If the peer is silent for `broadcast_timeout_secs`, it reverts to broadcast.
+//! This allows GCS changes without reconfiguration.
 
 use crate::dedup::ConcurrentDedup;
 use crate::endpoint_core::{EndpointCore, EndpointStats};
@@ -20,15 +27,29 @@ use dashmap::DashMap;
 use tokio::sync::broadcast::{self, error::RecvError};
 // futures::join_all removed - sequential sends avoid Vec allocation (issue #17)
 use mavlink::MavlinkVersion;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::io::Cursor;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
+
+/// Checks whether a `SocketAddr` is a broadcast address.
+///
+/// Returns `true` for IPv4 addresses where the host part is all 1s:
+/// - `255.255.255.255` (global broadcast)
+/// - Addresses ending in `.255` (common subnet broadcast for /24 networks)
+///
+/// Returns `false` for all IPv6 addresses (IPv6 uses multicast, not broadcast).
+pub fn is_broadcast_addr(addr: &SocketAddr) -> bool {
+    match addr.ip() {
+        IpAddr::V4(ipv4) => ipv4 == Ipv4Addr::BROADCAST || ipv4.octets()[3] == 255,
+        IpAddr::V6(_) => false,
+    }
+}
 
 /// Runs the UDP endpoint logic, continuously handling MAVLink traffic.
 ///
@@ -38,6 +59,10 @@ use tracing::{debug, error, trace, warn};
 /// In **server mode**, it binds to the given `address` and tracks all unique `SocketAddr`s
 /// from which it receives messages, using them as targets for outgoing broadcast messages.
 /// In **client mode**, it continuously sends outgoing messages to the specified `address`.
+///
+/// In **broadcast client mode** (client mode with a broadcast target address), it sends
+/// to the broadcast address until a unicast peer responds, then switches to unicast.
+/// If the peer is silent for `broadcast_timeout_secs`, it reverts to broadcast.
 ///
 /// # Arguments
 ///
@@ -50,6 +75,8 @@ use tracing::{debug, error, trace, warn};
 /// * `dedup` - Shared `Dedup` instance for message deduplication.
 /// * `filters` - `EndpointFilters` to apply for this specific endpoint.
 /// * `token` - `CancellationToken` to signal graceful shutdown.
+/// * `cleanup_ttl_secs` - Time-to-live for stale client entries in server mode.
+/// * `broadcast_timeout_secs` - Timeout before reverting from unicast to broadcast in broadcast client mode.
 ///
 /// # Returns
 ///
@@ -73,6 +100,7 @@ pub async fn run(
     filters: EndpointFilters,
     token: CancellationToken,
     cleanup_ttl_secs: u64,
+    broadcast_timeout_secs: u64,
     stats: Arc<EndpointStats>,
 ) -> Result<()> {
     let core = EndpointCore {
@@ -101,6 +129,21 @@ pub async fn run(
         .await
         .map_err(|e| RouterError::network(&bind_addr, e))?;
 
+    // Enable broadcast on the socket if the target is a broadcast address
+    let broadcast_mode = target_addr.as_ref().is_some_and(is_broadcast_addr);
+    if broadcast_mode {
+        socket
+            .set_broadcast(true)
+            .map_err(|e| RouterError::network(&address, e))?;
+        info!(
+            "UDP endpoint {} entering broadcast mode for {}",
+            id, address
+        );
+    }
+
+    // Peer state for broadcast mode: tracks the current unicast peer and when it was last seen
+    let broadcast_peer: Arc<Mutex<Option<(SocketAddr, Instant)>>> = Arc::new(Mutex::new(None));
+
     let r = Arc::new(socket);
     let s = r.clone();
 
@@ -110,6 +153,8 @@ pub async fn run(
     let clients_recv = clients.clone();
     let r_socket = r.clone();
     let core_rx = core.clone();
+    let broadcast_peer_recv = broadcast_peer.clone();
+    let broadcast_addr_for_recv = target_addr;
 
     // Receiver Task
     let recv_loop = async move {
@@ -118,6 +163,25 @@ pub async fn run(
             match r_socket.recv_from(&mut buf).await {
                 Ok((len, addr)) => {
                     clients_recv.insert(addr, Instant::now());
+
+                    // In broadcast mode, track unicast peers
+                    if broadcast_mode {
+                        if let Some(bcast_addr) = broadcast_addr_for_recv {
+                            if addr != bcast_addr && !is_broadcast_addr(&addr) {
+                                let mut peer = broadcast_peer_recv.lock();
+                                let is_new = peer
+                                    .as_ref()
+                                    .map_or(true, |(prev_addr, _)| *prev_addr != addr);
+                                if is_new {
+                                    info!(
+                                        "UDP broadcast endpoint: switching to unicast peer {}",
+                                        addr
+                                    );
+                                }
+                                *peer = Some((addr, Instant::now()));
+                            }
+                        }
+                    }
 
                     let mut cursor = Cursor::new(&buf[..len]);
                     let res = mavlink::read_v2_msg::<mavlink::common::MavMessage, _>(&mut cursor)
@@ -162,6 +226,8 @@ pub async fn run(
     let s_socket = s.clone();
     let mut bus_rx_loop = bus_rx;
     let core_tx = core.clone();
+    let broadcast_peer_send = broadcast_peer.clone();
+    let broadcast_timeout = Duration::from_secs(broadcast_timeout_secs);
 
     let send_loop = async move {
         // Pre-allocated buffer for client addresses to avoid per-message allocation (issue #17)
@@ -178,13 +244,38 @@ pub async fn run(
                     let pkt_len = packet_data.len() as u64;
 
                     if let Some(target) = target_addr {
-                        match s_socket.send_to(&packet_data, target).await {
-                            Ok(_) => {
-                                core_tx.stats.record_outgoing(pkt_len);
+                        if broadcast_mode {
+                            // Broadcast mode: check if we have an active unicast peer
+                            let send_addr = {
+                                let peer = broadcast_peer_send.lock();
+                                match &*peer {
+                                    Some((addr, last_seen))
+                                        if last_seen.elapsed() < broadcast_timeout =>
+                                    {
+                                        *addr
+                                    }
+                                    _ => target,
+                                }
+                            };
+                            match s_socket.send_to(&packet_data, send_addr).await {
+                                Ok(_) => {
+                                    core_tx.stats.record_outgoing(pkt_len);
+                                }
+                                Err(e) => {
+                                    core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                                    warn!("UDP send error to {}: {}", send_addr, e);
+                                }
                             }
-                            Err(e) => {
-                                core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
-                                warn!("UDP send error to target: {}", e);
+                        } else {
+                            // Normal client mode: always send to target
+                            match s_socket.send_to(&packet_data, target).await {
+                                Ok(_) => {
+                                    core_tx.stats.record_outgoing(pkt_len);
+                                }
+                                Err(e) => {
+                                    core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                                    warn!("UDP send error to target: {}", e);
+                                }
                             }
                         }
                     } else {
@@ -235,5 +326,92 @@ pub async fn run(
         _ = send_loop => Ok(()),
         _ = cleanup_loop => Ok(()),
         _ = token.cancelled() => Ok(()),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_broadcast_addr_global() {
+        let addr: SocketAddr = "255.255.255.255:14550".parse().unwrap();
+        assert!(is_broadcast_addr(&addr));
+    }
+
+    #[test]
+    fn test_is_broadcast_addr_subnet() {
+        let addr: SocketAddr = "192.168.1.255:14550".parse().unwrap();
+        assert!(is_broadcast_addr(&addr));
+    }
+
+    #[test]
+    fn test_is_broadcast_addr_unicast() {
+        let addr: SocketAddr = "192.168.1.1:14550".parse().unwrap();
+        assert!(!is_broadcast_addr(&addr));
+    }
+
+    #[test]
+    fn test_is_broadcast_addr_ipv6() {
+        let addr: SocketAddr = "[::1]:14550".parse().unwrap();
+        assert!(!is_broadcast_addr(&addr));
+    }
+
+    #[test]
+    fn test_is_broadcast_addr_10_network() {
+        let addr: SocketAddr = "10.0.0.255:14550".parse().unwrap();
+        assert!(is_broadcast_addr(&addr));
+    }
+
+    #[test]
+    fn test_broadcast_peer_state_machine() {
+        // Simulate the broadcast peer state transitions
+        let peer: Arc<Mutex<Option<(SocketAddr, Instant)>>> = Arc::new(Mutex::new(None));
+        let broadcast_addr: SocketAddr = "192.168.1.255:14550".parse().unwrap();
+        let unicast_addr: SocketAddr = "192.168.1.42:14550".parse().unwrap();
+        let timeout = Duration::from_millis(100);
+
+        // Initially no peer -> send to broadcast
+        {
+            let p = peer.lock();
+            let send_addr = match &*p {
+                Some((addr, last_seen)) if last_seen.elapsed() < timeout => *addr,
+                _ => broadcast_addr,
+            };
+            assert_eq!(send_addr, broadcast_addr);
+        }
+
+        // Simulate receiving from unicast peer
+        {
+            let mut p = peer.lock();
+            *p = Some((unicast_addr, Instant::now()));
+        }
+
+        // Now should send to unicast peer
+        {
+            let p = peer.lock();
+            let send_addr = match &*p {
+                Some((addr, last_seen)) if last_seen.elapsed() < timeout => *addr,
+                _ => broadcast_addr,
+            };
+            assert_eq!(send_addr, unicast_addr);
+        }
+
+        // Simulate timeout by setting last_seen in the past
+        {
+            let mut p = peer.lock();
+            *p = Some((unicast_addr, Instant::now() - Duration::from_millis(200)));
+        }
+
+        // After timeout, should revert to broadcast
+        {
+            let p = peer.lock();
+            let send_addr = match &*p {
+                Some((addr, last_seen)) if last_seen.elapsed() < timeout => *addr,
+                _ => broadcast_addr,
+            };
+            assert_eq!(send_addr, broadcast_addr);
+        }
     }
 }
