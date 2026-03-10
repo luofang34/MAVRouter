@@ -344,3 +344,91 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    /// Tests the baud cycling logic used in the Serial arm of spawn_all.
+    /// The pattern is: `let idx = baud_index.fetch_add(1, Ordering::Relaxed);`
+    /// followed by `bauds[idx % bauds.len()]`.
+
+    #[test]
+    fn test_baud_cycling_increments_and_wraps() {
+        let bauds: Vec<u32> = vec![9600, 57600, 115200];
+        let baud_index = AtomicUsize::new(0);
+
+        // First 3 calls should cycle through all rates in order
+        for expected in &bauds {
+            let idx = baud_index.fetch_add(1, Ordering::Relaxed);
+            let current_baud = bauds[idx % bauds.len()];
+            assert_eq!(current_baud, *expected);
+        }
+
+        // Next 3 calls should wrap around and repeat
+        for expected in &bauds {
+            let idx = baud_index.fetch_add(1, Ordering::Relaxed);
+            let current_baud = bauds[idx % bauds.len()];
+            assert_eq!(current_baud, *expected);
+        }
+    }
+
+    #[test]
+    fn test_baud_cycling_single_rate_always_same() {
+        let bauds: Vec<u32> = vec![115200];
+        let baud_index = AtomicUsize::new(0);
+
+        // With a single baud rate, every call should return the same value
+        for _ in 0..10 {
+            let idx = baud_index.fetch_add(1, Ordering::Relaxed);
+            let current_baud = bauds[idx % bauds.len()];
+            assert_eq!(current_baud, 115200);
+        }
+    }
+
+    #[test]
+    fn test_baud_cycling_two_rates_alternates() {
+        let bauds: Vec<u32> = vec![9600, 115200];
+        let baud_index = AtomicUsize::new(0);
+
+        for i in 0..6 {
+            let idx = baud_index.fetch_add(1, Ordering::Relaxed);
+            let current_baud = bauds[idx % bauds.len()];
+            if i % 2 == 0 {
+                assert_eq!(current_baud, 9600);
+            } else {
+                assert_eq!(current_baud, 115200);
+            }
+        }
+    }
+
+    #[test]
+    fn test_baud_cycling_counter_starts_at_zero() {
+        let baud_index = AtomicUsize::new(0);
+        let first_idx = baud_index.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(first_idx, 0, "first fetch_add should return 0");
+        assert_eq!(
+            baud_index.load(Ordering::Relaxed),
+            1,
+            "after first fetch_add, counter should be 1"
+        );
+    }
+
+    #[test]
+    fn test_baud_cycling_large_index_wraps_correctly() {
+        let bauds: Vec<u32> = vec![9600, 57600, 115200];
+        // Simulate a counter that has been running for a long time
+        let baud_index = AtomicUsize::new(999);
+
+        let idx = baud_index.fetch_add(1, Ordering::Relaxed);
+        let current_baud = bauds[idx % bauds.len()];
+        // 999 % 3 == 0
+        assert_eq!(current_baud, 9600);
+
+        let idx = baud_index.fetch_add(1, Ordering::Relaxed);
+        let current_baud = bauds[idx % bauds.len()];
+        // 1000 % 3 == 1
+        assert_eq!(current_baud, 57600);
+    }
+}

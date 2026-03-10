@@ -1399,4 +1399,307 @@ baud = [100, 115200]
             "baud rate 100 is too low and should fail validation"
         );
     }
+
+    // --- BaudRate::rates() returns correct slice for Fixed and Auto ---
+
+    #[test]
+    fn test_baud_rate_fixed_rates_returns_single_element_slice() {
+        let baud = BaudRate::Fixed(57600);
+        let rates = baud.rates();
+        assert_eq!(rates.len(), 1);
+        assert_eq!(rates[0], 57600);
+    }
+
+    #[test]
+    fn test_baud_rate_auto_rates_returns_full_slice() {
+        let baud = BaudRate::Auto(vec![9600, 57600, 115200, 921600]);
+        let rates = baud.rates();
+        assert_eq!(rates, &[9600, 57600, 115200, 921600]);
+    }
+
+    // --- BaudRate debug formatting ---
+
+    #[test]
+    fn test_baud_rate_debug_fixed() {
+        let baud = BaudRate::Fixed(115200);
+        let debug = format!("{:?}", baud);
+        assert_eq!(debug, "Fixed(115200)");
+    }
+
+    #[test]
+    fn test_baud_rate_debug_auto() {
+        let baud = BaudRate::Auto(vec![9600, 115200]);
+        let debug = format!("{:?}", baud);
+        assert_eq!(debug, "Auto([9600, 115200])");
+    }
+
+    // --- Boundary baud rates ---
+
+    #[test]
+    fn test_baud_rate_boundary_minimum_300() {
+        let config = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: BaudRate::Fixed(300),
+                flow_control: FlowControl::None,
+                filters: EndpointFilters::default(),
+                group: None,
+            }],
+        };
+        assert!(
+            config.validate().is_ok(),
+            "baud rate 300 should be the minimum valid value"
+        );
+    }
+
+    #[test]
+    fn test_baud_rate_boundary_maximum_4000000() {
+        let config = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: BaudRate::Fixed(4_000_000),
+                flow_control: FlowControl::None,
+                filters: EndpointFilters::default(),
+                group: None,
+            }],
+        };
+        assert!(
+            config.validate().is_ok(),
+            "baud rate 4000000 should be the maximum valid value"
+        );
+    }
+
+    #[test]
+    fn test_baud_rate_just_below_minimum_299() {
+        let config = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: BaudRate::Fixed(299),
+                flow_control: FlowControl::None,
+                filters: EndpointFilters::default(),
+                group: None,
+            }],
+        };
+        assert!(
+            config.validate().is_err(),
+            "baud rate 299 should be below minimum"
+        );
+    }
+
+    #[test]
+    fn test_baud_rate_just_above_maximum_4000001() {
+        let config = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: BaudRate::Fixed(4_000_001),
+                flow_control: FlowControl::None,
+                filters: EndpointFilters::default(),
+                group: None,
+            }],
+        };
+        assert!(
+            config.validate().is_err(),
+            "baud rate 4000001 should be above maximum"
+        );
+    }
+
+    // --- Array with single element ---
+
+    #[test]
+    fn test_baud_rate_array_single_element() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = [115200]
+"#;
+        let config = Config::from_str(toml).expect("should parse single-element baud array");
+        match &config.endpoint[0] {
+            EndpointConfig::Serial { baud, .. } => {
+                assert!(matches!(baud, BaudRate::Auto(_)));
+                assert_eq!(baud.rates(), &[115200]);
+                assert_eq!(baud.rates().len(), 1);
+            }
+            _ => panic!("expected Serial endpoint"),
+        }
+    }
+
+    // --- Array with duplicate values ---
+
+    #[test]
+    fn test_baud_rate_array_with_duplicates() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = [115200, 57600, 115200]
+"#;
+        let config = Config::from_str(toml).expect("duplicate baud rates should parse fine");
+        match &config.endpoint[0] {
+            EndpointConfig::Serial { baud, .. } => {
+                assert_eq!(baud.rates(), &[115200, 57600, 115200]);
+            }
+            _ => panic!("expected Serial endpoint"),
+        }
+    }
+
+    // --- TOML parsing: baud = 0 should fail validation (below 300) ---
+
+    #[test]
+    fn test_baud_rate_zero_fails_validation() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = 0
+"#;
+        assert!(
+            Config::from_str(toml).is_err(),
+            "baud rate 0 should fail validation"
+        );
+    }
+
+    // --- TOML parsing: baud = [115200, 5000000] should fail (5000000 too high) ---
+
+    #[test]
+    fn test_baud_rate_array_with_value_too_high() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = [115200, 5000000]
+"#;
+        assert!(
+            Config::from_str(toml).is_err(),
+            "baud rate 5000000 in array should fail validation"
+        );
+    }
+
+    // --- Merge behavior: serial endpoints with BaudRate in merged configs ---
+
+    #[test]
+    fn test_merge_serial_endpoints_with_baud_rate() {
+        let base = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: BaudRate::Fixed(115200),
+                flow_control: FlowControl::None,
+                filters: EndpointFilters::default(),
+                group: None,
+            }],
+        };
+
+        let overlay = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB1".to_string(),
+                baud: BaudRate::Auto(vec![9600, 57600, 115200]),
+                flow_control: FlowControl::None,
+                filters: EndpointFilters::default(),
+                group: None,
+            }],
+        };
+
+        let merged = base.merge(overlay);
+        assert_eq!(merged.endpoint.len(), 2);
+
+        // First endpoint preserved with Fixed baud
+        match &merged.endpoint[0] {
+            EndpointConfig::Serial { baud, device, .. } => {
+                assert_eq!(device, "/dev/ttyUSB0");
+                assert!(matches!(baud, BaudRate::Fixed(115200)));
+            }
+            _ => panic!("expected Serial endpoint at index 0"),
+        }
+
+        // Second endpoint added with Auto baud
+        match &merged.endpoint[1] {
+            EndpointConfig::Serial { baud, device, .. } => {
+                assert_eq!(device, "/dev/ttyUSB1");
+                assert_eq!(baud.rates(), &[9600, 57600, 115200]);
+            }
+            _ => panic!("expected Serial endpoint at index 1"),
+        }
+    }
+
+    // --- Boundary baud rates in arrays ---
+
+    #[test]
+    fn test_baud_rate_array_all_at_boundary() {
+        let config = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: BaudRate::Auto(vec![300, 4_000_000]),
+                flow_control: FlowControl::None,
+                filters: EndpointFilters::default(),
+                group: None,
+            }],
+        };
+        assert!(
+            config.validate().is_ok(),
+            "array with boundary values 300 and 4000000 should be valid"
+        );
+    }
+
+    #[test]
+    fn test_baud_rate_array_one_invalid_among_valid() {
+        let config = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Serial {
+                device: "/dev/ttyUSB0".to_string(),
+                baud: BaudRate::Auto(vec![9600, 115200, 5_000_000]),
+                flow_control: FlowControl::None,
+                filters: EndpointFilters::default(),
+                group: None,
+            }],
+        };
+        assert!(
+            config.validate().is_err(),
+            "array with one invalid baud rate should fail"
+        );
+    }
+
+    // --- TOML round-trip: auto-baud array from TOML ---
+
+    #[test]
+    fn test_toml_parse_auto_baud_common_rates() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyACM0"
+baud = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
+"#;
+        let config = Config::from_str(toml).expect("should parse common auto-baud rates");
+        match &config.endpoint[0] {
+            EndpointConfig::Serial { baud, .. } => {
+                assert_eq!(
+                    baud.rates(),
+                    &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
+                );
+            }
+            _ => panic!("expected Serial endpoint"),
+        }
+    }
+
+    // --- BaudRate clone behavior ---
+
+    #[test]
+    fn test_baud_rate_clone_fixed() {
+        let baud = BaudRate::Fixed(115200);
+        let cloned = baud.clone();
+        assert_eq!(cloned.rates(), baud.rates());
+    }
+
+    #[test]
+    fn test_baud_rate_clone_auto() {
+        let baud = BaudRate::Auto(vec![9600, 57600, 115200]);
+        let cloned = baud.clone();
+        assert_eq!(cloned.rates(), baud.rates());
+    }
 }
