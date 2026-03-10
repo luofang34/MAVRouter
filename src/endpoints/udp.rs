@@ -9,7 +9,7 @@
 //! to a predefined remote address.
 
 use crate::dedup::ConcurrentDedup;
-use crate::endpoint_core::EndpointCore;
+use crate::endpoint_core::{EndpointCore, EndpointStats};
 use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::framing::MavlinkFrame;
@@ -23,6 +23,7 @@ use mavlink::MavlinkVersion;
 use parking_lot::RwLock;
 use std::io::Cursor;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
@@ -72,6 +73,7 @@ pub async fn run(
     filters: EndpointFilters,
     token: CancellationToken,
     cleanup_ttl_secs: u64,
+    stats: Arc<EndpointStats>,
 ) -> Result<()> {
     let core = EndpointCore {
         id: EndpointId(id),
@@ -80,6 +82,7 @@ pub async fn run(
         dedup: dedup.clone(),
         filters: filters.clone(),
         update_routing: true,
+        stats,
     };
 
     let (bind_addr, target_addr) = if mode == crate::config::EndpointMode::Server {
@@ -145,6 +148,7 @@ pub async fn run(
                     }
                 }
                 Err(e) => {
+                    core_rx.stats.errors.fetch_add(1, Ordering::Relaxed);
                     error!("UDP recv error: {}", e);
                     // Backoff to prevent tight error loop (issue #21)
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -171,10 +175,17 @@ pub async fn run(
                     }
 
                     let packet_data = msg.serialized_bytes.clone();
+                    let pkt_len = packet_data.len() as u64;
 
                     if let Some(target) = target_addr {
-                        if let Err(e) = s_socket.send_to(&packet_data, target).await {
-                            warn!("UDP send error to target: {}", e);
+                        match s_socket.send_to(&packet_data, target).await {
+                            Ok(_) => {
+                                core_tx.stats.record_outgoing(pkt_len);
+                            }
+                            Err(e) => {
+                                core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                                warn!("UDP send error to target: {}", e);
+                            }
                         }
                     } else {
                         // Collect keys first (releases DashMap shard locks before await)
@@ -182,8 +193,14 @@ pub async fn run(
                         targets.extend(clients_send.iter().map(|r| *r.key()));
 
                         for target in &targets {
-                            if let Err(e) = s_socket.send_to(&packet_data, target).await {
-                                warn!("UDP broadcast error to {}: {}", target, e);
+                            match s_socket.send_to(&packet_data, target).await {
+                                Ok(_) => {
+                                    core_tx.stats.record_outgoing(pkt_len);
+                                }
+                                Err(e) => {
+                                    core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                                    warn!("UDP broadcast error to {}: {}", target, e);
+                                }
                             }
                         }
                     }

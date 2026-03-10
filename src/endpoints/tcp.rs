@@ -9,7 +9,7 @@
 //! automatically retries connection if lost.
 
 use crate::dedup::ConcurrentDedup;
-use crate::endpoint_core::{run_stream_loop, EndpointCore, ExponentialBackoff};
+use crate::endpoint_core::{run_stream_loop, EndpointCore, EndpointStats, ExponentialBackoff};
 use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
@@ -71,6 +71,7 @@ pub async fn run(
     dedup: ConcurrentDedup,
     filters: EndpointFilters,
     token: CancellationToken,
+    stats: Arc<EndpointStats>,
 ) -> Result<()> {
     // With tokio::broadcast, new subscribers are created via bus_tx.subscribe()
     // rather than cloning bus_rx. Drop the receiver to avoid unused variable warnings.
@@ -83,6 +84,7 @@ pub async fn run(
         dedup: dedup.clone(),
         filters: filters.clone(),
         update_routing: true, // TCP client mode updates routing table
+        stats,
     };
 
     match mode {
@@ -120,6 +122,7 @@ pub async fn run(
                                     dedup: core.dedup.clone(),
                                     filters: core.filters.clone(),
                                     update_routing: true, // Required for targeted message routing
+                                    stats: Arc::new(EndpointStats::new()),
                                 };
                                 let rx_client = core.bus_tx.subscribe();
                                 let token_client = token.clone();

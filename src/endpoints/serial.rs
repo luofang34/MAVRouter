@@ -6,7 +6,7 @@
 //! serial port connection is lost.
 
 use crate::dedup::ConcurrentDedup;
-use crate::endpoint_core::{run_stream_loop, EndpointCore};
+use crate::endpoint_core::{run_stream_loop, EndpointCore, EndpointStats};
 use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
@@ -61,6 +61,7 @@ pub async fn run(
     dedup: ConcurrentDedup,
     filters: EndpointFilters,
     token: CancellationToken,
+    stats: Arc<EndpointStats>,
 ) -> Result<()> {
     let core = EndpointCore {
         id: EndpointId(id),
@@ -69,6 +70,7 @@ pub async fn run(
         dedup: dedup.clone(),
         filters: filters.clone(),
         update_routing: true,
+        stats,
     };
 
     // No inner retry loop - supervisor handles retries with exponential backoff (issue #26)

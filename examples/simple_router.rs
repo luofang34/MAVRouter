@@ -42,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
             filter::EndpointFilters::default(),
             t,
             300,
+            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
         )
         .await
     });

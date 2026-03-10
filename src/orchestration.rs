@@ -7,10 +7,10 @@
 
 use crate::config::{Config, EndpointConfig};
 use crate::dedup::ConcurrentDedup;
-use crate::endpoint_core::ExponentialBackoff;
+use crate::endpoint_core::{EndpointStats, ExponentialBackoff};
 use crate::error::Result;
 use crate::filter::EndpointFilters;
-use crate::router::{create_bus, MessageBus};
+use crate::router::{create_bus, EndpointId, MessageBus};
 use crate::routing::RoutingTable;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -28,6 +28,8 @@ pub struct OrchestratedRouter {
     pub bus: MessageBus,
     /// Shared routing table.
     pub routing_table: Arc<RwLock<RoutingTable>>,
+    /// Per-endpoint statistics: (EndpointId, name, stats).
+    pub endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,
 }
 
 /// Spawns all endpoints and background tasks from a configuration.
@@ -42,6 +44,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
     let bus = create_bus(config.general.bus_capacity);
     let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
     let mut handles = Vec::new();
+    let mut endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)> = Vec::new();
 
     let dedup_period = config.general.dedup_period_ms.unwrap_or(0);
     let dedup = ConcurrentDedup::new(Duration::from_millis(dedup_period));
@@ -93,6 +96,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
     // Spawn implicit TCP server if configured
     if let Some(port) = config.general.tcp_port {
         let name = format!("Implicit TCP Server :{}", port);
+        let stats = Arc::new(EndpointStats::new());
         let bus_tx = bus.sender();
         let rt = routing_table.clone();
         let dd = dedup.clone();
@@ -100,6 +104,8 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
         let filters = EndpointFilters::default();
         let addr = format!("0.0.0.0:{}", port);
         let task_token = cancel_token.child_token();
+
+        endpoint_stats.push((EndpointId(id), name.clone(), stats.clone()));
 
         handles.push(tokio::spawn(supervise(
             name,
@@ -113,9 +119,12 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 let addr = addr.clone();
                 let m = crate::config::EndpointMode::Server;
                 let token = task_token.clone();
+                let st = stats.clone();
                 async move {
-                    crate::endpoints::tcp::run(id, addr, m, bus_tx, bus_rx, rt, dd, filters, token)
-                        .await
+                    crate::endpoints::tcp::run(
+                        id, addr, m, bus_tx, bus_rx, rt, dd, filters, token, st,
+                    )
+                    .await
                 }
             },
         )));
@@ -157,6 +166,8 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 filters,
             } => {
                 let name = format!("UDP Endpoint {} ({})", i, address);
+                let stats = Arc::new(EndpointStats::new());
+                endpoint_stats.push((EndpointId(i), name.clone(), stats.clone()));
                 let address = address.clone();
                 let mode = mode.clone();
                 let filters = filters.clone();
@@ -177,6 +188,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                             filters.clone(),
                             task_token.clone(),
                             cleanup_ttl,
+                            stats.clone(),
                         )
                     },
                 )));
@@ -187,6 +199,8 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 filters,
             } => {
                 let name = format!("TCP Endpoint {} ({})", i, address);
+                let stats = Arc::new(EndpointStats::new());
+                endpoint_stats.push((EndpointId(i), name.clone(), stats.clone()));
                 let address = address.clone();
                 let mode = mode.clone();
                 let filters = filters.clone();
@@ -205,6 +219,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                             dedup.clone(),
                             filters.clone(),
                             task_token.clone(),
+                            stats.clone(),
                         )
                     },
                 )));
@@ -215,6 +230,8 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 filters,
             } => {
                 let name = format!("Serial Endpoint {} ({})", i, device);
+                let stats = Arc::new(EndpointStats::new());
+                endpoint_stats.push((EndpointId(i), name.clone(), stats.clone()));
                 let device = device.clone();
                 let baud = *baud;
                 let filters = filters.clone();
@@ -233,6 +250,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                             dedup.clone(),
                             filters.clone(),
                             task_token.clone(),
+                            stats.clone(),
                         )
                     },
                 )));
@@ -244,6 +262,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
         handles,
         bus,
         routing_table,
+        endpoint_stats,
     }
 }
 

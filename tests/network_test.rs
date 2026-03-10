@@ -236,6 +236,7 @@ async fn test_tcp_server_connection_limit() {
             dd,
             f,
             t,
+            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
         )
         .await
         .unwrap();

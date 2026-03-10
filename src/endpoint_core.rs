@@ -14,12 +14,81 @@ use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
 use mavlink::Message;
 use parking_lot::RwLock;
+use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
 use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
+
+/// Per-endpoint traffic statistics tracked via atomic counters.
+///
+/// These counters are incremented using `Ordering::Relaxed` for minimal overhead.
+/// Use [`EndpointStats::snapshot`] to read a consistent point-in-time view.
+#[derive(Debug, Default)]
+pub struct EndpointStats {
+    /// Number of messages received (ingress) on this endpoint.
+    pub msgs_in: AtomicU64,
+    /// Number of messages sent (egress) from this endpoint.
+    pub msgs_out: AtomicU64,
+    /// Total bytes received (ingress) on this endpoint.
+    pub bytes_in: AtomicU64,
+    /// Total bytes sent (egress) from this endpoint.
+    pub bytes_out: AtomicU64,
+    /// Number of errors encountered on this endpoint.
+    pub errors: AtomicU64,
+}
+
+impl EndpointStats {
+    /// Creates a new `EndpointStats` with all counters at zero.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns a point-in-time snapshot of the current counter values.
+    pub fn snapshot(&self) -> EndpointStatsSnapshot {
+        EndpointStatsSnapshot {
+            msgs_in: self.msgs_in.load(Ordering::Relaxed),
+            msgs_out: self.msgs_out.load(Ordering::Relaxed),
+            bytes_in: self.bytes_in.load(Ordering::Relaxed),
+            bytes_out: self.bytes_out.load(Ordering::Relaxed),
+            errors: self.errors.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Records an outgoing message with the given byte count.
+    pub fn record_outgoing(&self, bytes: u64) {
+        self.msgs_out.fetch_add(1, Ordering::Relaxed);
+        self.bytes_out.fetch_add(bytes, Ordering::Relaxed);
+    }
+}
+
+/// A point-in-time snapshot of [`EndpointStats`] with plain `u64` fields.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EndpointStatsSnapshot {
+    /// Number of messages received (ingress).
+    pub msgs_in: u64,
+    /// Number of messages sent (egress).
+    pub msgs_out: u64,
+    /// Total bytes received (ingress).
+    pub bytes_in: u64,
+    /// Total bytes sent (egress).
+    pub bytes_out: u64,
+    /// Number of errors encountered.
+    pub errors: u64,
+}
+
+impl fmt::Display for EndpointStatsSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "in={}/{} out={}/{} err={}",
+            self.msgs_in, self.bytes_in, self.msgs_out, self.bytes_out, self.errors
+        )
+    }
+}
 
 /// Exponential backoff helper for connection retries.
 #[derive(Debug)]
@@ -89,6 +158,8 @@ pub struct EndpointCore {
     /// Whether this endpoint should update the routing table.
     /// Set to false for TCP server client connections to reduce contention.
     pub update_routing: bool,
+    /// Per-endpoint traffic statistics (atomic counters).
+    pub stats: Arc<EndpointStats>,
 }
 
 /// Get current wall-clock timestamp in microseconds with low overhead.
@@ -137,6 +208,7 @@ impl EndpointCore {
         }
 
         // 2. Use raw bytes from parser (zero-copy, no re-serialization needed)
+        let raw_len = frame.raw_bytes.len() as u64;
         let serialized_bytes = frame.raw_bytes;
 
         // 3. Check deduplication (sharded for concurrent access - no global lock)
@@ -196,7 +268,12 @@ impl EndpointCore {
             target,
         }) {
             warn!("Bus send error: {:?}", e);
+            return;
         }
+
+        // 6. Record incoming message stats
+        self.stats.msgs_in.fetch_add(1, Ordering::Relaxed);
+        self.stats.bytes_in.fetch_add(raw_len, Ordering::Relaxed);
     }
 
     /// Checks if an outgoing `RoutedMessage` should be sent to this endpoint.
@@ -353,9 +430,12 @@ where
                 continue;
             }
 
+            let len = msg.serialized_bytes.len() as u64;
             if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
+                core.stats.errors.fetch_add(1, Ordering::Relaxed);
                 return Err(RouterError::network(&name, e));
             }
+            core.stats.record_outgoing(len);
 
             // Optimistic batching - process a fixed batch to reduce wakeups
             const BATCH_SIZE: usize = 1024;
@@ -363,9 +443,12 @@ where
                 match bus_rx.try_recv() {
                     Ok(m) => {
                         if core.check_outgoing(&m) {
+                            let batch_len = m.serialized_bytes.len() as u64;
                             if let Err(e) = writer.write_all(&m.serialized_bytes).await {
+                                core.stats.errors.fetch_add(1, Ordering::Relaxed);
                                 return Err(RouterError::network(&name, e));
                             }
+                            core.stats.record_outgoing(batch_len);
                         }
                     }
                     Err(TryRecvError::Empty) => break,
@@ -378,6 +461,7 @@ where
 
             // Flush buffered writes; keep simple to avoid deadlocks in low traffic tests
             if let Err(e) = writer.flush().await {
+                core.stats.errors.fetch_add(1, Ordering::Relaxed);
                 return Err(RouterError::network(&name, e));
             }
         }
@@ -393,6 +477,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use std::time::SystemTime;
@@ -446,6 +531,82 @@ mod tests {
         assert_eq!(backoff.next_backoff(), Duration::from_secs(3));
         assert_eq!(backoff.next_backoff(), Duration::from_secs(9));
         assert_eq!(backoff.next_backoff(), Duration::from_secs(27));
+    }
+
+    #[test]
+    fn test_endpoint_stats_default_zero() {
+        let stats = EndpointStats::default();
+        let snap = stats.snapshot();
+        assert_eq!(snap, EndpointStatsSnapshot::default());
+        assert_eq!(snap.msgs_in, 0);
+        assert_eq!(snap.msgs_out, 0);
+        assert_eq!(snap.bytes_in, 0);
+        assert_eq!(snap.bytes_out, 0);
+        assert_eq!(snap.errors, 0);
+    }
+
+    #[test]
+    fn test_endpoint_stats_increment_and_snapshot() {
+        let stats = EndpointStats::new();
+        stats.msgs_in.fetch_add(5, Ordering::Relaxed);
+        stats.bytes_in.fetch_add(500, Ordering::Relaxed);
+        stats.record_outgoing(100);
+        stats.record_outgoing(200);
+        stats.errors.fetch_add(1, Ordering::Relaxed);
+
+        let snap = stats.snapshot();
+        assert_eq!(snap.msgs_in, 5);
+        assert_eq!(snap.bytes_in, 500);
+        assert_eq!(snap.msgs_out, 2);
+        assert_eq!(snap.bytes_out, 300);
+        assert_eq!(snap.errors, 1);
+    }
+
+    #[test]
+    fn test_endpoint_stats_snapshot_display() {
+        let snap = EndpointStatsSnapshot {
+            msgs_in: 10,
+            msgs_out: 20,
+            bytes_in: 1000,
+            bytes_out: 2000,
+            errors: 3,
+        };
+        let display = format!("{}", snap);
+        assert_eq!(display, "in=10/1000 out=20/2000 err=3");
+    }
+
+    #[test]
+    fn test_endpoint_stats_concurrent_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let stats = Arc::new(EndpointStats::new());
+        let num_threads = 8;
+        let ops_per_thread = 1000u64;
+
+        let handles: Vec<_> = (0..num_threads)
+            .map(|_| {
+                let stats = stats.clone();
+                thread::spawn(move || {
+                    for _ in 0..ops_per_thread {
+                        stats.msgs_in.fetch_add(1, Ordering::Relaxed);
+                        stats.bytes_in.fetch_add(10, Ordering::Relaxed);
+                        stats.record_outgoing(20);
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        let snap = stats.snapshot();
+        let total = num_threads as u64 * ops_per_thread;
+        assert_eq!(snap.msgs_in, total);
+        assert_eq!(snap.bytes_in, total * 10);
+        assert_eq!(snap.msgs_out, total);
+        assert_eq!(snap.bytes_out, total * 20);
     }
 
     #[test]
