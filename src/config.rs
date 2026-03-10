@@ -35,7 +35,7 @@ use tokio::fs;
 /// address = "127.0.0.1:5761"
 /// mode = "client"
 /// ```
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct Config {
     /// General router configuration.
     #[serde(default)]
@@ -197,6 +197,134 @@ fn default_mode_client() -> EndpointMode {
 }
 
 impl Config {
+    /// Merges two configurations together.
+    ///
+    /// For `Option` fields in `GeneralConfig`, the `other` value wins if `Some`.
+    /// For non-`Option` fields with defaults (bus_capacity, routing_table_ttl_secs, etc.),
+    /// `other` always wins (last-file-wins semantics).
+    /// Endpoints are concatenated: `self.endpoint` followed by `other.endpoint`.
+    pub fn merge(mut self, other: Config) -> Config {
+        // Option fields: other wins if Some
+        if other.general.tcp_port.is_some() {
+            self.general.tcp_port = other.general.tcp_port;
+        }
+        if other.general.dedup_period_ms.is_some() {
+            self.general.dedup_period_ms = other.general.dedup_period_ms;
+        }
+        if other.general.log.is_some() {
+            self.general.log = other.general.log;
+        }
+        if other.general.stats_socket_path.is_some() {
+            self.general.stats_socket_path = other.general.stats_socket_path;
+        }
+
+        // Non-Option fields: other always wins
+        self.general.log_telemetry = other.general.log_telemetry;
+        self.general.bus_capacity = other.general.bus_capacity;
+        self.general.routing_table_ttl_secs = other.general.routing_table_ttl_secs;
+        self.general.routing_table_prune_interval_secs =
+            other.general.routing_table_prune_interval_secs;
+        self.general.stats_retention_secs = other.general.stats_retention_secs;
+        self.general.stats_sample_interval_secs = other.general.stats_sample_interval_secs;
+        self.general.stats_log_interval_secs = other.general.stats_log_interval_secs;
+
+        // Endpoints: concatenate
+        self.endpoint.extend(other.endpoint);
+
+        self
+    }
+
+    /// Loads all `*.toml` files from a directory, sorted alphabetically,
+    /// and merges them sequentially into a single configuration.
+    ///
+    /// Later files override earlier files for general settings.
+    /// Endpoint lists are concatenated across all files.
+    /// Non-TOML files in the directory are ignored.
+    /// An empty directory produces a valid config with defaults and no endpoints.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `RouterError` if the directory cannot be read, or if any
+    /// `.toml` file cannot be parsed or the final merged config fails validation.
+    pub async fn load_dir(path: impl AsRef<Path>) -> Result<Self> {
+        let dir_path = path.as_ref();
+        let dir_str = dir_path.display().to_string();
+
+        let mut entries = fs::read_dir(dir_path)
+            .await
+            .map_err(|e| RouterError::filesystem(&dir_str, e))?;
+
+        let mut toml_files: Vec<String> = Vec::new();
+
+        loop {
+            match entries.next_entry().await {
+                Ok(Some(entry)) => {
+                    let file_path = entry.path();
+                    if file_path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                        if let Some(name) = file_path.file_name().and_then(|n| n.to_str()) {
+                            toml_files.push(name.to_string());
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => return Err(RouterError::filesystem(&dir_str, e)),
+            }
+        }
+
+        toml_files.sort();
+
+        let mut merged = Config::default();
+
+        for filename in &toml_files {
+            let file_path = dir_path.join(filename);
+            let content = fs::read_to_string(&file_path)
+                .await
+                .map_err(|e| RouterError::filesystem(file_path.display().to_string(), e))?;
+
+            let config: Config = toml::from_str(&content).map_err(|e| {
+                RouterError::config(format!(
+                    "Failed to parse config {}: {}",
+                    file_path.display(),
+                    e
+                ))
+            })?;
+
+            merged = merged.merge(config);
+        }
+
+        merged.validate()?;
+        Ok(merged)
+    }
+
+    /// Loads configuration from a file and/or directory, merging them.
+    ///
+    /// If both `file` and `dir` are provided, the file is loaded first,
+    /// then the directory configs are merged on top (directory wins for
+    /// general settings, endpoints accumulate).
+    ///
+    /// If neither is provided, returns a default configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `RouterError` if any file cannot be read or parsed,
+    /// or if the final merged config fails validation.
+    pub async fn load_merged(file: Option<&str>, dir: Option<&str>) -> Result<Self> {
+        let mut config = match file {
+            Some(path) => Self::load(path).await?,
+            None => Config::default(),
+        };
+
+        if let Some(dir_path) = dir {
+            let dir_config = Self::load_dir(dir_path).await?;
+            // dir_config is already validated by load_dir, but we need to
+            // re-merge and re-validate the combination
+            config = config.merge(dir_config);
+            config.validate()?;
+        }
+
+        Ok(config)
+    }
+
     /// Parses router configuration from a TOML string.
     ///
     /// This is useful for programmatically generating configurations without
@@ -690,5 +818,289 @@ flow_control = "rtscts"
             Config::from_str(toml).is_err(),
             "invalid flow_control value should fail"
         );
+    }
+
+    #[test]
+    fn test_merge_general_settings() {
+        let base = Config {
+            general: GeneralConfig {
+                tcp_port: Some(5760),
+                dedup_period_ms: Some(100),
+                bus_capacity: 1000,
+                log: Some("logs".to_string()),
+                ..Default::default()
+            },
+            endpoint: vec![EndpointConfig::Udp {
+                address: "0.0.0.0:14550".to_string(),
+                mode: EndpointMode::Server,
+                filters: EndpointFilters::default(),
+            }],
+        };
+
+        let overlay = Config {
+            general: GeneralConfig {
+                tcp_port: Some(5761),
+                bus_capacity: 2000,
+                routing_table_ttl_secs: 600,
+                ..Default::default()
+            },
+            endpoint: vec![EndpointConfig::Tcp {
+                address: "127.0.0.1:5762".to_string(),
+                mode: EndpointMode::Client,
+                filters: EndpointFilters::default(),
+            }],
+        };
+
+        let merged = base.merge(overlay);
+
+        // Option fields: overlay wins if Some
+        assert_eq!(merged.general.tcp_port, Some(5761));
+        // Option field: base preserved when overlay is None
+        assert_eq!(merged.general.dedup_period_ms, Some(100));
+        // Non-Option: overlay always wins
+        assert_eq!(merged.general.bus_capacity, 2000);
+        assert_eq!(merged.general.routing_table_ttl_secs, 600);
+        // log: overlay is None, so base preserved
+        assert_eq!(merged.general.log, Some("logs".to_string()));
+        // Endpoints concatenated
+        assert_eq!(merged.endpoint.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_endpoints_accumulate() {
+        let a = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![
+                EndpointConfig::Udp {
+                    address: "0.0.0.0:14550".to_string(),
+                    mode: EndpointMode::Server,
+                    filters: EndpointFilters::default(),
+                },
+                EndpointConfig::Udp {
+                    address: "0.0.0.0:14551".to_string(),
+                    mode: EndpointMode::Server,
+                    filters: EndpointFilters::default(),
+                },
+            ],
+        };
+
+        let b = Config {
+            general: GeneralConfig::default(),
+            endpoint: vec![EndpointConfig::Tcp {
+                address: "127.0.0.1:5760".to_string(),
+                mode: EndpointMode::Client,
+                filters: EndpointFilters::default(),
+            }],
+        };
+
+        let merged = a.merge(b);
+        assert_eq!(merged.endpoint.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_load_dir_multiple_files() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        std::fs::write(
+            dir.path().join("00-base.toml"),
+            r#"
+[general]
+tcp_port = 5760
+bus_capacity = 1000
+"#,
+        )
+        .expect("write base");
+
+        std::fs::write(
+            dir.path().join("10-endpoints.toml"),
+            r#"
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+"#,
+        )
+        .expect("write endpoints");
+
+        let config = Config::load_dir(dir.path()).await.expect("load dir");
+        assert_eq!(config.general.tcp_port, Some(5760));
+        // bus_capacity is overridden by the second file's default (5000)
+        // because non-Option fields always take the last-file-wins value
+        assert_eq!(config.general.bus_capacity, default_bus_capacity());
+        assert_eq!(config.endpoint.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_load_dir_alphabetical_order() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        // First file sets bus_capacity to 1000
+        std::fs::write(
+            dir.path().join("00-base.toml"),
+            r#"
+[general]
+bus_capacity = 1000
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+"#,
+        )
+        .expect("write base");
+
+        // Second file overrides bus_capacity to 2000 and adds endpoint
+        std::fs::write(
+            dir.path().join("10-override.toml"),
+            r#"
+[general]
+bus_capacity = 2000
+
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:5761"
+mode = "client"
+"#,
+        )
+        .expect("write override");
+
+        let config = Config::load_dir(dir.path()).await.expect("load dir");
+        // Last file wins for non-Option fields
+        assert_eq!(config.general.bus_capacity, 2000);
+        // Endpoints accumulate from both files
+        assert_eq!(config.endpoint.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_load_dir_empty() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let config = Config::load_dir(dir.path()).await.expect("load empty dir");
+        assert!(config.endpoint.is_empty());
+        assert_eq!(config.general.bus_capacity, default_bus_capacity());
+    }
+
+    #[tokio::test]
+    async fn test_load_dir_ignores_non_toml() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        std::fs::write(
+            dir.path().join("config.toml"),
+            r#"
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+"#,
+        )
+        .expect("write toml");
+
+        std::fs::write(dir.path().join("notes.txt"), "not a config file").expect("write txt");
+        std::fs::write(dir.path().join("backup.toml.bak"), "not toml extension")
+            .expect("write bak");
+        std::fs::write(dir.path().join("README.md"), "# Readme").expect("write md");
+
+        let config = Config::load_dir(dir.path()).await.expect("load dir");
+        // Only the .toml file should be loaded
+        assert_eq!(config.endpoint.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_load_dir_endpoints_from_multiple_files_accumulate() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        std::fs::write(
+            dir.path().join("01-udp.toml"),
+            r#"
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14551"
+mode = "server"
+"#,
+        )
+        .expect("write udp");
+
+        std::fs::write(
+            dir.path().join("02-tcp.toml"),
+            r#"
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:5760"
+mode = "client"
+"#,
+        )
+        .expect("write tcp");
+
+        std::fs::write(
+            dir.path().join("03-serial.toml"),
+            r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = 115200
+"#,
+        )
+        .expect("write serial");
+
+        let config = Config::load_dir(dir.path()).await.expect("load dir");
+        assert_eq!(config.endpoint.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_load_merged_file_and_dir() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        // Write main config file
+        let file_path = dir.path().join("main.toml");
+        std::fs::write(
+            &file_path,
+            r#"
+[general]
+tcp_port = 5760
+bus_capacity = 1000
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+"#,
+        )
+        .expect("write main config");
+
+        // Create config directory with overrides
+        let conf_dir = dir.path().join("conf.d");
+        std::fs::create_dir(&conf_dir).expect("create conf.d");
+
+        std::fs::write(
+            conf_dir.join("10-extra.toml"),
+            r#"
+[general]
+bus_capacity = 3000
+
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:5761"
+mode = "client"
+"#,
+        )
+        .expect("write extra");
+
+        let config = Config::load_merged(
+            Some(file_path.to_str().expect("path to str")),
+            Some(conf_dir.to_str().expect("dir to str")),
+        )
+        .await
+        .expect("load merged");
+
+        // Dir overrides file for non-Option fields
+        assert_eq!(config.general.bus_capacity, 3000);
+        // File's Option field preserved
+        assert_eq!(config.general.tcp_port, Some(5760));
+        // Endpoints from both
+        assert_eq!(config.endpoint.len(), 2);
     }
 }
