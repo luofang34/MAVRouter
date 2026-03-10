@@ -55,6 +55,7 @@ pub async fn run(
     id: usize,
     device: String,
     baud: u32,
+    flow_control: tokio_serial::FlowControl,
     bus_tx: broadcast::Sender<RoutedMessage>,
     bus_rx: broadcast::Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
@@ -72,7 +73,7 @@ pub async fn run(
     };
 
     // No inner retry loop - supervisor handles retries with exponential backoff (issue #26)
-    open_and_run(&device, baud, bus_rx, core, token).await
+    open_and_run(&device, baud, flow_control, bus_rx, core, token).await
 }
 
 /// Opens the specified serial port and runs the stream processing loop.
@@ -101,11 +102,13 @@ pub async fn run(
 async fn open_and_run(
     device: &str,
     baud: u32,
+    flow_control: tokio_serial::FlowControl,
     bus_rx: broadcast::Receiver<RoutedMessage>,
     core: EndpointCore,
     token: CancellationToken,
 ) -> Result<()> {
     let mut port = tokio_serial::new(device, baud)
+        .flow_control(flow_control)
         .open_native_async()
         .map_err(|e| RouterError::serial(device, e))?;
 

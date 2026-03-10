@@ -157,6 +157,9 @@ pub enum EndpointConfig {
         device: String,
         /// Baud rate for the serial connection.
         baud: u32,
+        /// Flow control setting for the serial port.
+        #[serde(default)]
+        flow_control: FlowControl,
         /// Filters to apply to messages passing through this endpoint.
         #[serde(flatten)]
         filters: EndpointFilters,
@@ -171,6 +174,19 @@ pub enum EndpointMode {
     Client,
     /// Listens for incoming connections as a server.
     Server,
+}
+
+/// Flow control setting for serial endpoints.
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowControl {
+    /// No flow control (default).
+    #[default]
+    None,
+    /// Hardware (RTS/CTS) flow control.
+    Hardware,
+    /// Software (XON/XOFF) flow control.
+    Software,
 }
 
 fn default_mode_server() -> EndpointMode {
@@ -385,7 +401,7 @@ impl FromStr for Config {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -464,6 +480,7 @@ mod tests {
             endpoint: vec![EndpointConfig::Serial {
                 device: "/dev/ttyUSB0".to_string(),
                 baud: 100, // Too low
+                flow_control: FlowControl::None,
                 filters: EndpointFilters::default(),
             }],
         };
@@ -474,6 +491,7 @@ mod tests {
             endpoint: vec![EndpointConfig::Serial {
                 device: "/dev/ttyUSB0".to_string(),
                 baud: 5_000_000, // Too high
+                flow_control: FlowControl::None,
                 filters: EndpointFilters::default(),
             }],
         };
@@ -487,6 +505,7 @@ mod tests {
             endpoint: vec![EndpointConfig::Serial {
                 device: "/dev/ttyUSB0".to_string(),
                 baud: 115200,
+                flow_control: FlowControl::None,
                 filters: EndpointFilters::default(),
             }],
         };
@@ -585,5 +604,91 @@ address = "0.0.0.0:14550"
 "#;
         // bus_capacity too small should fail validation
         assert!(Config::from_str(toml).is_err());
+    }
+
+    #[test]
+    fn test_flow_control_hardware() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = 115200
+flow_control = "hardware"
+"#;
+        let config = Config::from_str(toml).expect("should parse hardware flow_control");
+        match &config.endpoint[0] {
+            EndpointConfig::Serial { flow_control, .. } => {
+                assert_eq!(*flow_control, FlowControl::Hardware);
+            }
+            _ => panic!("expected Serial endpoint"),
+        }
+    }
+
+    #[test]
+    fn test_flow_control_software() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = 115200
+flow_control = "software"
+"#;
+        let config = Config::from_str(toml).expect("should parse software flow_control");
+        match &config.endpoint[0] {
+            EndpointConfig::Serial { flow_control, .. } => {
+                assert_eq!(*flow_control, FlowControl::Software);
+            }
+            _ => panic!("expected Serial endpoint"),
+        }
+    }
+
+    #[test]
+    fn test_flow_control_none_explicit() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = 115200
+flow_control = "none"
+"#;
+        let config = Config::from_str(toml).expect("should parse none flow_control");
+        match &config.endpoint[0] {
+            EndpointConfig::Serial { flow_control, .. } => {
+                assert_eq!(*flow_control, FlowControl::None);
+            }
+            _ => panic!("expected Serial endpoint"),
+        }
+    }
+
+    #[test]
+    fn test_flow_control_default_when_missing() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = 115200
+"#;
+        let config = Config::from_str(toml).expect("should parse with default flow_control");
+        match &config.endpoint[0] {
+            EndpointConfig::Serial { flow_control, .. } => {
+                assert_eq!(*flow_control, FlowControl::None);
+            }
+            _ => panic!("expected Serial endpoint"),
+        }
+    }
+
+    #[test]
+    fn test_flow_control_invalid_value() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = 115200
+flow_control = "rtscts"
+"#;
+        assert!(
+            Config::from_str(toml).is_err(),
+            "invalid flow_control value should fail"
+        );
     }
 }

@@ -212,11 +212,17 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
             EndpointConfig::Serial {
                 device,
                 baud,
+                flow_control,
                 filters,
             } => {
                 let name = format!("Serial Endpoint {} ({})", i, device);
                 let device = device.clone();
                 let baud = *baud;
+                let serial_flow_control = match flow_control {
+                    crate::config::FlowControl::None => tokio_serial::FlowControl::None,
+                    crate::config::FlowControl::Hardware => tokio_serial::FlowControl::Hardware,
+                    crate::config::FlowControl::Software => tokio_serial::FlowControl::Software,
+                };
                 let filters = filters.clone();
 
                 handles.push(tokio::spawn(supervise(
@@ -227,6 +233,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                             i,
                             device.clone(),
                             baud,
+                            serial_flow_control,
                             bus_tx.clone(),
                             bus.subscribe(),
                             routing_table.clone(),
