@@ -85,6 +85,11 @@ pub struct GeneralConfig {
     #[serde(default)]
     #[cfg_attr(not(unix), allow(dead_code))]
     pub stats_socket_path: Option<String>,
+    /// System IDs that trigger sniffer mode. When an endpoint sees traffic from
+    /// a system ID in this list, all messages are forwarded to that endpoint
+    /// unconditionally (bypassing routing decisions). Useful for monitoring tools.
+    #[serde(default)]
+    pub sniffer_sysids: Vec<u8>,
 }
 
 fn default_bus_capacity() -> usize {
@@ -105,6 +110,7 @@ impl Default for GeneralConfig {
             stats_sample_interval_secs: default_stats_sample_interval_secs(),
             stats_log_interval_secs: default_stats_log_interval_secs(),
             stats_socket_path: None,
+            sniffer_sysids: Vec::new(),
         }
     }
 }
@@ -261,6 +267,7 @@ impl Config {
         self.general.stats_retention_secs = other.general.stats_retention_secs;
         self.general.stats_sample_interval_secs = other.general.stats_sample_interval_secs;
         self.general.stats_log_interval_secs = other.general.stats_log_interval_secs;
+        self.general.sniffer_sysids = other.general.sniffer_sysids;
 
         // Endpoints: concatenate
         self.endpoint.extend(other.endpoint);
@@ -1232,6 +1239,31 @@ broadcast_timeout_secs = 10
             }
             _ => panic!("Expected Udp endpoint"),
         }
+    }
+
+    #[test]
+    fn test_sniffer_sysids_config() {
+        let toml = r#"
+[general]
+sniffer_sysids = [253, 254]
+
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+"#;
+        let config = Config::from_str(toml).expect("should parse config with sniffer_sysids");
+        assert_eq!(config.general.sniffer_sysids, vec![253, 254]);
+    }
+
+    #[test]
+    fn test_sniffer_sysids_default_empty() {
+        let toml = r#"
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+"#;
+        let config = Config::from_str(toml).expect("should parse config without sniffer_sysids");
+        assert!(config.general.sniffer_sysids.is_empty());
     }
 
     #[test]
