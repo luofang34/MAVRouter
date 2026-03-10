@@ -1,9 +1,81 @@
 use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
-use serde::Deserialize;
+use serde::de::{self, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
+use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 use tokio::fs;
+
+/// Baud rate configuration for serial endpoints.
+/// Accepts either a single baud rate or a list for auto-detection.
+#[derive(Debug, Clone)]
+pub enum BaudRate {
+    /// Fixed baud rate.
+    Fixed(u32),
+    /// List of baud rates to cycle through for auto-detection.
+    Auto(Vec<u32>),
+}
+
+impl BaudRate {
+    /// Returns the baud rates as a slice.
+    /// For `Fixed`, returns a single-element slice.
+    /// For `Auto`, returns the full list.
+    pub fn rates(&self) -> &[u32] {
+        match self {
+            BaudRate::Fixed(rate) => std::slice::from_ref(rate),
+            BaudRate::Auto(rates) => rates,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BaudRate {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BaudRateVisitor;
+
+        impl<'de> Visitor<'de> for BaudRateVisitor {
+            type Value = BaudRate;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a baud rate (integer) or array of baud rates")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<BaudRate, E>
+            where
+                E: de::Error,
+            {
+                let value =
+                    u32::try_from(value).map_err(|_| E::custom("baud rate too large for u32"))?;
+                Ok(BaudRate::Fixed(value))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> std::result::Result<BaudRate, E>
+            where
+                E: de::Error,
+            {
+                let value = u32::try_from(value)
+                    .map_err(|_| E::custom("baud rate must be a positive integer"))?;
+                Ok(BaudRate::Fixed(value))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<BaudRate, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut rates = Vec::new();
+                while let Some(rate) = seq.next_element::<u32>()? {
+                    rates.push(rate);
+                }
+                Ok(BaudRate::Auto(rates))
+            }
+        }
+
+        deserializer.deserialize_any(BaudRateVisitor)
+    }
+}
 
 /// Configuration for MAVLink router.
 ///
@@ -171,8 +243,9 @@ pub enum EndpointConfig {
     Serial {
         /// Device path for the serial port (e.g., "/dev/ttyACM0" or "COM1").
         device: String,
-        /// Baud rate for the serial connection.
-        baud: u32,
+        /// Baud rate for the serial connection. Accepts a single integer or
+        /// an array of integers for auto-baud detection.
+        baud: BaudRate,
         /// Flow control setting for the serial port.
         #[serde(default)]
         flow_control: FlowControl,
@@ -470,12 +543,21 @@ impl Config {
                     }
                 }
                 EndpointConfig::Serial { device, baud, .. } => {
-                    // Verify baud rate
-                    if *baud < 300 || *baud > 4_000_000 {
+                    // Verify baud rate(s)
+                    let rates = baud.rates();
+                    if rates.is_empty() {
                         return Err(RouterError::config(format!(
-                            "Invalid baud rate in endpoint {}: {} (must be 300-4000000)",
-                            i, baud
+                            "Empty baud rate list in endpoint {}",
+                            i
                         )));
+                    }
+                    for rate in rates {
+                        if *rate < 300 || *rate > 4_000_000 {
+                            return Err(RouterError::config(format!(
+                                "Invalid baud rate in endpoint {}: {} (must be 300-4000000)",
+                                i, rate
+                            )));
+                        }
                     }
 
                     #[cfg(unix)]
@@ -644,7 +726,7 @@ mod tests {
             general: GeneralConfig::default(),
             endpoint: vec![EndpointConfig::Serial {
                 device: "/dev/ttyUSB0".to_string(),
-                baud: 100, // Too low
+                baud: BaudRate::Fixed(100), // Too low
                 flow_control: FlowControl::None,
                 filters: EndpointFilters::default(),
                 group: None,
@@ -656,7 +738,7 @@ mod tests {
             general: GeneralConfig::default(),
             endpoint: vec![EndpointConfig::Serial {
                 device: "/dev/ttyUSB0".to_string(),
-                baud: 5_000_000, // Too high
+                baud: BaudRate::Fixed(5_000_000), // Too high
                 flow_control: FlowControl::None,
                 filters: EndpointFilters::default(),
                 group: None,
@@ -671,7 +753,7 @@ mod tests {
             general: GeneralConfig::default(),
             endpoint: vec![EndpointConfig::Serial {
                 device: "/dev/ttyUSB0".to_string(),
-                baud: 115200,
+                baud: BaudRate::Fixed(115200),
                 flow_control: FlowControl::None,
                 filters: EndpointFilters::default(),
                 group: None,
@@ -1252,5 +1334,69 @@ mode = "client"
             }
             _ => panic!("Expected Udp endpoint"),
         }
+    }
+
+    #[test]
+    fn test_baud_rate_single_value() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = 115200
+"#;
+        let config = Config::from_str(toml).expect("should parse single baud rate");
+        match &config.endpoint[0] {
+            EndpointConfig::Serial { baud, .. } => {
+                assert!(matches!(baud, BaudRate::Fixed(115200)));
+                assert_eq!(baud.rates(), &[115200]);
+            }
+            _ => panic!("expected Serial endpoint"),
+        }
+    }
+
+    #[test]
+    fn test_baud_rate_array() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = [9600, 57600, 115200]
+"#;
+        let config = Config::from_str(toml).expect("should parse baud rate array");
+        match &config.endpoint[0] {
+            EndpointConfig::Serial { baud, .. } => {
+                assert!(matches!(baud, BaudRate::Auto(_)));
+                assert_eq!(baud.rates(), &[9600, 57600, 115200]);
+            }
+            _ => panic!("expected Serial endpoint"),
+        }
+    }
+
+    #[test]
+    fn test_baud_rate_empty_array_invalid() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = []
+"#;
+        assert!(
+            Config::from_str(toml).is_err(),
+            "empty baud rate array should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_baud_rate_invalid_value_in_array() {
+        let toml = r#"
+[[endpoint]]
+type = "serial"
+device = "/dev/ttyUSB0"
+baud = [100, 115200]
+"#;
+        assert!(
+            Config::from_str(toml).is_err(),
+            "baud rate 100 is too low and should fail validation"
+        );
     }
 }
