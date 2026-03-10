@@ -432,8 +432,39 @@ mod tests {
     }
 
     #[test]
+    fn test_client_bind_addr_ipv4_loopback() {
+        let target: SocketAddr = "127.0.0.1:14550".parse().unwrap();
+        assert_eq!(client_bind_addr(&target), "0.0.0.0:0");
+    }
+
+    #[test]
+    fn test_client_bind_addr_ipv4_broadcast() {
+        let target: SocketAddr = "255.255.255.255:14550".parse().unwrap();
+        assert_eq!(client_bind_addr(&target), "0.0.0.0:0");
+    }
+
+    #[test]
     fn test_client_bind_addr_ipv6() {
         let target: SocketAddr = "[::1]:14550".parse().unwrap();
+        assert_eq!(client_bind_addr(&target), "[::]:0");
+    }
+
+    #[test]
+    fn test_client_bind_addr_ipv6_loopback() {
+        let target: SocketAddr = "[::1]:9000".parse().unwrap();
+        assert_eq!(client_bind_addr(&target), "[::]:0");
+    }
+
+    #[test]
+    fn test_client_bind_addr_ipv6_link_local() {
+        let target: SocketAddr = "[fe80::1]:14550".parse().unwrap();
+        assert_eq!(client_bind_addr(&target), "[::]:0");
+    }
+
+    #[test]
+    fn test_client_bind_addr_ipv4_mapped_ipv6() {
+        // IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) are technically IPv6
+        let target: SocketAddr = "[::ffff:192.168.1.1]:14550".parse().unwrap();
         assert_eq!(client_bind_addr(&target), "[::]:0");
     }
 
@@ -455,6 +486,21 @@ mod tests {
         assert!(!is_broadcast_addr(&addr));
     }
 
+    #[test]
+    fn test_is_broadcast_addr_ipv6_multicast_not_broadcast() {
+        // IPv6 multicast (ff02::1 = all-nodes) should NOT be treated as broadcast
+        let addr: SocketAddr = "[ff02::1]:14550".parse().unwrap();
+        assert!(!is_broadcast_addr(&addr));
+    }
+
+    #[tokio::test]
+    async fn test_udp_ipv4_bind() {
+        let sock = tokio::net::UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        let addr = sock.local_addr().unwrap();
+        assert!(addr.is_ipv4());
+        assert_ne!(addr.port(), 0, "OS should assign a non-zero port");
+    }
+
     #[tokio::test]
     async fn test_udp_ipv6_bind() {
         // Try to bind to IPv6 - skip test if not supported
@@ -462,10 +508,49 @@ mod tests {
             Ok(sock) => {
                 let addr = sock.local_addr().unwrap();
                 assert!(addr.is_ipv6());
+                assert_ne!(addr.port(), 0, "OS should assign a non-zero port");
             }
             Err(_) => {
                 // IPv6 not available in this environment, skip
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_udp_ipv4_send_to_loopback() {
+        // Bind a receiver on IPv4 loopback
+        let receiver = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let recv_addr = receiver.local_addr().unwrap();
+
+        // Bind a sender on IPv4
+        let sender = tokio::net::UdpSocket::bind("0.0.0.0:0").await.unwrap();
+
+        let payload = b"hello ipv4";
+        sender.send_to(payload, recv_addr).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let (len, from) = receiver.recv_from(&mut buf).await.unwrap();
+        assert_eq!(&buf[..len], payload);
+        assert!(from.is_ipv4());
+    }
+
+    #[tokio::test]
+    async fn test_udp_ipv6_send_to_loopback() {
+        // Try to bind on IPv6 loopback - skip if not available
+        let receiver = match tokio::net::UdpSocket::bind("[::1]:0").await {
+            Ok(s) => s,
+            Err(_) => return, // IPv6 not available, skip
+        };
+        let recv_addr = receiver.local_addr().unwrap();
+
+        let sender = tokio::net::UdpSocket::bind("[::1]:0").await.unwrap();
+
+        let payload = b"hello ipv6";
+        sender.send_to(payload, recv_addr).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let (len, from) = receiver.recv_from(&mut buf).await.unwrap();
+        assert_eq!(&buf[..len], payload);
+        assert!(from.is_ipv6());
     }
 }
