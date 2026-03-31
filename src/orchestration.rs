@@ -269,6 +269,8 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                     task_token.clone(),
                     move || {
                         let idx = baud_index.fetch_add(1, Ordering::Relaxed);
+                        // idx % bauds.len() is always in bounds; bauds is non-empty (validated by config)
+                        #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
                         let current_baud = bauds[idx % bauds.len()];
                         crate::endpoints::serial::run(
                             i,

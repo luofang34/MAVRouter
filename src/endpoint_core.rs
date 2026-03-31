@@ -178,7 +178,10 @@ fn timestamp_us_fast() -> u64 {
 
     // Saturate to u64 on extremely long uptimes
     let total = start_unix.saturating_add(start_instant.elapsed());
-    total.as_micros().min(u64::MAX as u128) as u64
+    // Saturated to u64::MAX before cast — truncation is impossible
+    #[allow(clippy::cast_possible_truncation)]
+    let result = total.as_micros().min(u64::MAX as u128) as u64;
+    result
 }
 
 impl EndpointCore {
@@ -208,6 +211,8 @@ impl EndpointCore {
         }
 
         // 2. Use raw bytes from parser (zero-copy, no re-serialization needed)
+        // MAVLink frames are max 280 bytes, always fits u64
+        #[allow(clippy::cast_possible_truncation)]
         let raw_len = frame.raw_bytes.len() as u64;
         let serialized_bytes = frame.raw_bytes;
 
@@ -398,6 +403,8 @@ where
             match reader.read(&mut buf).await {
                 Ok(0) => return Ok(()), // EOF
                 Ok(n) => {
+                    // n comes from reader.read(), always <= buf.len()
+                    #[allow(clippy::indexing_slicing)]
                     parser.push(&buf[..n]);
                     while let Some(frame) = parser.parse_next() {
                         core_read.handle_incoming_frame(frame);
@@ -430,6 +437,7 @@ where
                 continue;
             }
 
+            #[allow(clippy::cast_possible_truncation)] // MAVLink frame fits u64
             let len = msg.serialized_bytes.len() as u64;
             if let Err(e) = writer.write_all(&msg.serialized_bytes).await {
                 core.stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -443,6 +451,7 @@ where
                 match bus_rx.try_recv() {
                     Ok(m) => {
                         if core.check_outgoing(&m) {
+                            #[allow(clippy::cast_possible_truncation)]
                             let batch_len = m.serialized_bytes.len() as u64;
                             if let Err(e) = writer.write_all(&m.serialized_bytes).await {
                                 core.stats.errors.fetch_add(1, Ordering::Relaxed);
@@ -477,7 +486,12 @@ where
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(
+    clippy::expect_used,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 mod tests {
     use super::*;
     use std::time::SystemTime;

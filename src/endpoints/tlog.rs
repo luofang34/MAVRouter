@@ -54,10 +54,13 @@ pub async fn run(
     }
 
     let now = SystemTime::now();
-    let since_the_epoch_us = now
+    let since_the_epoch = now
         .duration_since(UNIX_EPOCH)
         .unwrap_or(std::time::Duration::from_secs(0))
-        .as_micros() as u64;
+        .as_micros();
+    // Truncate to u64 — timestamp wraps after ~584,942 years
+    #[allow(clippy::cast_possible_truncation)]
+    let since_the_epoch_us = since_the_epoch as u64;
     let filename = format!("flight_{}.tlog", since_the_epoch_us);
     let path = dir.join(filename);
 

@@ -62,7 +62,21 @@ harness = false
 unsafe_code = { level = "forbid", priority = -1 }
 
 [lints.clippy]
+# === DENY tier ===
+# Note: clippy restriction lints cannot use "forbid" because derive macros
+# (e.g. clap's #[derive(Parser)]) emit #[allow(clippy::restriction)] which
+# conflicts with forbid. Use "deny" instead — CI enforces via -D warnings.
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+exit = "deny"
 unwrap_used = { level = "deny", priority = -1 }
 expect_used = "deny"
 panic = "deny"
-todo = "warn"
+unreachable = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"

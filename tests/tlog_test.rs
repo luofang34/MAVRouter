@@ -1,5 +1,10 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
+#![allow(clippy::indexing_slicing)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::print_stdout)]
 
 use bytes::Bytes;
 use mavlink::{MavlinkVersion, Message};

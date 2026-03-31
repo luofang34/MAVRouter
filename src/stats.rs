@@ -17,6 +17,7 @@ pub struct StatsHistory {
 impl StatsHistory {
     /// Creates a new `StatsHistory` with the specified maximum retention time.
     pub fn new(max_age_secs: u64) -> Self {
+        #[allow(clippy::cast_possible_truncation)] // Retention is typically <=86400, fits usize
         let capacity = max_age_secs as usize;
         Self {
             samples: VecDeque::with_capacity(capacity),
@@ -64,13 +65,15 @@ impl StatsHistory {
         }
 
         let window = self.samples.range(start_idx..);
-        let window_len = self.samples.len() - start_idx;
+        let window_len = self.samples.len().saturating_sub(start_idx);
 
         if window_len == 0 {
             return None;
         }
 
         // Single-pass computation of sum, min, max
+        // Route count accumulation bounded by sample count * max_routes
+        #[allow(clippy::arithmetic_side_effects)]
         let (sum_routes, min_routes, max_routes) =
             window.fold((0usize, usize::MAX, 0usize), |(sum, min, max), s| {
                 (
@@ -110,7 +113,7 @@ pub struct AggregatedStats {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)] // Allow expect() in tests for descriptive failure messages
+#[allow(clippy::expect_used, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use crate::routing::RoutingStats;

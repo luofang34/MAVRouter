@@ -192,6 +192,8 @@ pub async fn run(
                         }
                     }
 
+                    // len comes from socket recv, always <= buf.len()
+                    #[allow(clippy::indexing_slicing)]
                     let mut cursor = Cursor::new(&buf[..len]);
                     let res = mavlink::read_v2_msg::<mavlink::common::MavMessage, _>(&mut cursor)
                         .map(|(h, m)| (h, m, MavlinkVersion::V2))
@@ -203,7 +205,10 @@ pub async fn run(
 
                     if let Ok((header, message, version)) = res {
                         // Capture raw bytes from UDP datagram (zero-copy)
+                        #[allow(clippy::cast_possible_truncation)]
                         let packet_len = cursor.position() as usize;
+                        // packet_len <= len <= buf.len()
+                        #[allow(clippy::indexing_slicing)]
                         let raw_bytes = Bytes::copy_from_slice(&buf[..packet_len]);
                         // Use Core logic
                         core_rx.handle_incoming_frame(MavlinkFrame {
@@ -250,6 +255,7 @@ pub async fn run(
                     }
 
                     let packet_data = msg.serialized_bytes.clone();
+                    #[allow(clippy::cast_possible_truncation)] // MAVLink frame fits u64
                     let pkt_len = packet_data.len() as u64;
 
                     if let Some(target) = target_addr {
@@ -323,7 +329,7 @@ pub async fn run(
             let ttl = Duration::from_secs(cleanup_ttl_secs);
             let initial_len = clients_cleanup.len();
             clients_cleanup.retain(|_addr, last_seen| now.duration_since(*last_seen) < ttl);
-            let dropped = initial_len - clients_cleanup.len();
+            let dropped = initial_len.saturating_sub(clients_cleanup.len());
             if dropped > 0 {
                 debug!("UDP Cleanup: removed {} stale clients", dropped);
             }
@@ -339,8 +345,13 @@ pub async fn run(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
-#[allow(clippy::expect_used, clippy::panic)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 mod tests {
     use super::*;
 

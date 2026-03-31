@@ -1,3 +1,7 @@
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::arithmetic_side_effects)]
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use mavlink::common::MavMessage;
 use mavlink::common::*;

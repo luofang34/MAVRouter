@@ -213,7 +213,8 @@ impl RoutingTable {
                 }
             });
         if increment_ep_count_for_routes {
-            *self.endpoint_counts.entry(endpoint_id).or_insert(0) += 1;
+            let count = self.endpoint_counts.entry(endpoint_id).or_insert(0);
+            *count = count.saturating_add(1);
         }
 
         // Update sys_routes
@@ -234,7 +235,8 @@ impl RoutingTable {
                 }
             });
         if increment_ep_count_for_sys_routes {
-            *self.endpoint_counts.entry(endpoint_id).or_insert(0) += 1;
+            let count = self.endpoint_counts.entry(endpoint_id).or_insert(0);
+            *count = count.saturating_add(1);
         }
     }
 
@@ -356,7 +358,8 @@ impl RoutingTable {
             let expired = now.duration_since(entry.last_seen) > max_age;
             if expired {
                 for &ep_id in &entry.endpoints {
-                    *removed_endpoint_counts.entry(ep_id).or_insert(0) += 1;
+                    let c = removed_endpoint_counts.entry(ep_id).or_insert(0);
+                    *c = c.saturating_add(1);
                 }
             }
             !expired
@@ -366,7 +369,8 @@ impl RoutingTable {
             let expired = now.duration_since(entry.last_seen) > max_age;
             if expired {
                 for &ep_id in &entry.endpoints {
-                    *removed_endpoint_counts.entry(ep_id).or_insert(0) += 1;
+                    let c = removed_endpoint_counts.entry(ep_id).or_insert(0);
+                    *c = c.saturating_add(1);
                 }
             }
             !expired
@@ -399,7 +403,7 @@ impl RoutingTable {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(clippy::expect_used, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 

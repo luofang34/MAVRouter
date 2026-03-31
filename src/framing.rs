@@ -62,9 +62,9 @@ impl StreamParser {
     ///
     /// * `data` - The byte slice to append.
     pub fn push(&mut self, data: &[u8]) {
-        let new_len = self.buffer.len() + data.len();
+        let new_len = self.buffer.len().saturating_add(data.len());
         if new_len > MAX_BUFFER_SIZE {
-            let overflow = new_len - MAX_BUFFER_SIZE;
+            let overflow = new_len.saturating_sub(MAX_BUFFER_SIZE);
             warn!(
                 "StreamParser buffer full, dropping {} oldest bytes to make room",
                 overflow
@@ -118,6 +118,8 @@ impl StreamParser {
 
             match res_v2 {
                 Ok((header, message)) => {
+                    // cursor position is always <= buffer length which fits in usize
+                    #[allow(clippy::cast_possible_truncation)]
                     let len = cursor.position() as usize;
                     // Zero-copy slice out the parsed frame
                     let raw_bytes = self.buffer.split_to(len).freeze();
@@ -136,6 +138,8 @@ impl StreamParser {
 
                     match res_v1 {
                         Ok((header, message)) => {
+                            // cursor position is always <= buffer length which fits in usize
+                            #[allow(clippy::cast_possible_truncation)]
                             let len = cursor.position() as usize;
                             // Zero-copy slice out the parsed frame
                             let raw_bytes = self.buffer.split_to(len).freeze();
@@ -178,7 +182,11 @@ fn is_eof(e: &mavlink::error::MessageReadError) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation
+)]
 mod tests {
     use super::*;
     use mavlink::common::MavMessage;

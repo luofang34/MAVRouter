@@ -1,6 +1,3 @@
-#![deny(unsafe_code)]
-#![deny(clippy::unwrap_used)]
-
 mod config;
 mod endpoint_core;
 mod error;
@@ -100,6 +97,8 @@ async fn run_stats_server(
                                 _ => return,
                             };
 
+                            // n comes from stream.read(), always <= buf.len()
+                            #[allow(clippy::indexing_slicing)]
                             let command = String::from_utf8_lossy(&buf[..n]).trim().to_string();
                             let response = match command.as_str() {
                                 "stats" => {

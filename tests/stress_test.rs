@@ -1,4 +1,8 @@
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::print_stdout)]
 
 //! Stress and reliability tests
 

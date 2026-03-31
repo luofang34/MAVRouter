@@ -51,10 +51,6 @@ impl Dedup {
     ///
     /// * `dedup_period` - The duration within which messages are considered duplicates.
     ///   If `Duration::ZERO`, deduplication is effectively disabled.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `dedup_period` is non-zero but too small to create at least 2 buckets.
     pub fn new(dedup_period: Duration) -> Self {
         if dedup_period.is_zero() {
             return Self {
@@ -69,7 +65,11 @@ impl Dedup {
         // Use a default bucket interval, e.g., 100ms.
         // Ensure at least 2 buckets for proper time wheel rotation.
         let bucket_interval = Duration::from_millis(100);
-        let mut num_buckets = (dedup_period.as_millis() / bucket_interval.as_millis()) as usize;
+        // Division of two u128 values; bucket_interval is const 100ms so no division by zero
+        #[allow(clippy::arithmetic_side_effects)]
+        let mut num_buckets =
+            usize::try_from(dedup_period.as_millis() / bucket_interval.as_millis())
+                .unwrap_or(usize::MAX);
         num_buckets = num_buckets.max(2); // Ensure at least 2 buckets
 
         let mut buckets = Vec::with_capacity(num_buckets);
@@ -137,7 +137,9 @@ impl Dedup {
             return;
         }
         let hash = ahash_hash(payload);
-        self.buckets[self.current_bucket].insert(hash);
+        if let Some(bucket) = self.buckets.get_mut(self.current_bucket) {
+            bucket.insert(hash);
+        }
     }
 
     /// Combined check and insert operation to avoid hashing twice.
@@ -167,7 +169,9 @@ impl Dedup {
         }
 
         // Not a duplicate, insert into current bucket
-        self.buckets[self.current_bucket].insert(hash);
+        if let Some(bucket) = self.buckets.get_mut(self.current_bucket) {
+            bucket.insert(hash);
+        }
         false
     }
 
@@ -183,10 +187,15 @@ impl Dedup {
         }
 
         // Advance to the next bucket
-        self.current_bucket = (self.current_bucket + 1) % self.num_buckets;
+        // num_buckets is always >= 2 (enforced in new()), so modulo is safe
+        #[allow(clippy::arithmetic_side_effects)]
+        let next = self.current_bucket.wrapping_add(1) % self.num_buckets;
+        self.current_bucket = next;
 
         // Clear the new current bucket (which was previously the oldest)
-        self.buckets[self.current_bucket].clear();
+        if let Some(bucket) = self.buckets.get_mut(self.current_bucket) {
+            bucket.clear();
+        }
         trace!("Dedup: Rotated to bucket {}", self.current_bucket);
     }
 }
@@ -270,9 +279,12 @@ impl ConcurrentDedup {
 
         // Compute hash once, use it for both shard selection and dedup check
         let hash = ahash_hash(payload);
+        #[allow(clippy::cast_possible_truncation)] // Intentional: truncation for shard selection
         let shard_idx = (hash as usize) & (NUM_SHARDS - 1); // Fast modulo for power of 2
 
         // Lock only this shard
+        // shard_idx is always < NUM_SHARDS due to bitmask
+        #[allow(clippy::indexing_slicing)]
         let mut shard = self.shards[shard_idx].lock();
         shard.check_and_insert_with_hash(hash)
     }
@@ -307,13 +319,22 @@ impl Dedup {
         }
 
         // Not a duplicate, insert into current bucket
-        self.buckets[self.current_bucket].insert(hash);
+        if let Some(bucket) = self.buckets.get_mut(self.current_bucket) {
+            bucket.insert(hash);
+        }
         false
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::panic)]
+#[allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::print_stdout
+)]
 mod tests {
     use super::*;
     use std::thread;

@@ -61,9 +61,7 @@
 //! - [`filter`]: Per-endpoint message filtering
 //! - [`config`]: Configuration parsing and validation
 
-#![deny(unsafe_code)]
-#![deny(clippy::unwrap_used)]
-#![deny(missing_docs)] // Enforce 100% documentation coverage
+#![deny(missing_docs)] // Enforce 100% documentation coverage (lib-only, not in Cargo.toml)
 
 /// Router configuration and parsing utilities.
 pub mod config;
