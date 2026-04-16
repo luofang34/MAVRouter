@@ -29,7 +29,7 @@ const MAX_TCP_CLIENTS: usize = 100;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Runs the TCP endpoint logic, continuously handling connections based on the specified mode.
 ///
@@ -108,7 +108,9 @@ pub async fn run(
                                     continue;
                                 }
 
-                                let _ = stream.set_nodelay(true);
+                                if let Err(e) = stream.set_nodelay(true) {
+                                    debug!("set_nodelay failed for {}: {}", addr, e);
+                                }
 
                                 // Generate unique endpoint ID using global counter (issue #6)
                                 let client_id = NEXT_TCP_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
@@ -130,7 +132,18 @@ pub async fn run(
                                 join_set.spawn(async move {
                                     let (read, write) = stream.into_split();
                                     let name = format!("TCP Client {}", addr);
-                                    let _ = run_stream_loop(read, write, rx_client, core_client, token_client, name).await;
+                                    if let Err(e) = run_stream_loop(
+                                        read,
+                                        write,
+                                        rx_client,
+                                        core_client,
+                                        token_client,
+                                        name.clone(),
+                                    )
+                                    .await
+                                    {
+                                        warn!("{} stream loop ended with error: {}", name, e);
+                                    }
                                 });
                             }
                             Err(e) => error!("TCP Accept error: {}", e),
@@ -155,20 +168,27 @@ pub async fn run(
 
                 match TcpStream::connect(&address).await {
                     Ok(stream) => {
-                        let _ = stream.set_nodelay(true);
+                        if let Err(e) = stream.set_nodelay(true) {
+                            debug!("set_nodelay failed for {}: {}", address, e);
+                        }
                         info!("Connected to {}", address);
                         backoff.reset();
                         let (read, write) = stream.into_split();
                         let name = format!("TCP Client {}", address);
-                        let _ = run_stream_loop(
+                        if let Err(e) = run_stream_loop(
                             read,
                             write,
                             bus_tx.subscribe(),
                             core.clone(),
                             token.clone(),
-                            name,
+                            name.clone(),
                         )
-                        .await;
+                        .await
+                        {
+                            // A follow-up warn! about reconnecting is logged below;
+                            // keep the error details at debug to avoid duplicate noise.
+                            debug!("{} stream loop ended with error: {}", name, e);
+                        }
                         warn!("Connection to {} lost, retrying...", address);
                     }
                     Err(e) => {

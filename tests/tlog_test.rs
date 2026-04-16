@@ -31,7 +31,7 @@ fn build_heartbeat_bytes() -> (mavlink::MavHeader, u32, Vec<u8>) {
 fn create_test_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("mavrouter_test_{}_{}", name, std::process::id()));
     // Clean up any leftover from a previous run
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ok();
     dir
 }
 
@@ -44,7 +44,7 @@ fn toml_safe_path(path: &std::path::Path) -> String {
 
 /// Helper: remove temp directory after test.
 fn cleanup_test_dir(dir: &std::path::Path) {
-    let _ = std::fs::remove_dir_all(dir);
+    std::fs::remove_dir_all(dir).ok();
 }
 
 // ---------- Test 1: TLOG File Creation ----------
@@ -158,7 +158,7 @@ async fn test_tlog_message_format() {
 
     // Signal shutdown and wait for TLOG task to finish
     cancel_token.cancel();
-    let _ = tlog_handle.await;
+    tlog_handle.await.ok();
 
     // Find the tlog file
     let entries: Vec<_> = std::fs::read_dir(&temp_dir)

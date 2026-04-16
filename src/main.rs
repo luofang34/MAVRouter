@@ -18,11 +18,12 @@ mod stats;
 
 use crate::config::Config;
 use crate::error::Result;
+use crate::orchestration::NamedTask;
 use crate::stats::StatsHistory;
 use clap::Parser;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[cfg(unix)]
 use crate::orchestration::supervise;
@@ -32,8 +33,6 @@ use crate::routing::RoutingTable;
 use parking_lot::RwLock;
 #[cfg(unix)]
 use std::sync::Arc;
-#[cfg(unix)]
-use tracing::warn;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -81,7 +80,12 @@ async fn run_stats_server(
             _ = token.cancelled() => {
                 info!("Stats Server shutting down.");
                 if path.exists() {
-                    let _ = tokio::fs::remove_file(path).await;
+                    if let Err(e) = tokio::fs::remove_file(path).await {
+                        warn!(
+                            "Failed to remove stats socket '{}' on shutdown: {}",
+                            socket_path, e
+                        );
+                    }
                 }
                 break;
             }
@@ -133,7 +137,13 @@ async fn run_stats_server(
                                 _ => "Unknown command. Try 'help'".to_string(),
                             };
 
-                            let _ = stream.write_all(response.as_bytes()).await;
+                            if let Err(e) = stream.write_all(response.as_bytes()).await {
+                                // Clients routinely disconnect mid-response, so this
+                                // is expected noise — keep it at debug.
+                                tracing::debug!(
+                                    "Stats Server write to client failed: {}", e
+                                );
+                            }
                         });
                     }
                     Err(e) => {
@@ -294,7 +304,9 @@ async fn main() -> Result<()> {
         let log_interval = config.general.stats_log_interval_secs;
 
         if sample_interval > 0 && retention > 0 {
-            orchestrated.handles.push(tokio::spawn(async move {
+            orchestrated.tasks.push(NamedTask::new(
+                "Stats Reporter",
+                tokio::spawn(async move {
                 let mut history = StatsHistory::new(retention);
                 let mut last_log_time = 0u64;
 
@@ -309,10 +321,16 @@ async fn main() -> Result<()> {
                             let mut stats = rt.stats();
                             drop(rt); // Release lock quickly
                             // Ensure timestamp reflects sample time
-                            stats.timestamp = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs();
+                            stats.timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                                Ok(d) => d.as_secs(),
+                                Err(e) => {
+                                    // System clock predates the UNIX epoch — can happen on
+                                    // embedded boards with an unset RTC. Record 0 and warn
+                                    // so the anomaly shows up rather than being swallowed.
+                                    warn!("System clock is before UNIX epoch: {}", e);
+                                    0
+                                }
+                            };
 
                             let current_timestamp = stats.timestamp;
                             history.push(stats.clone());
@@ -361,7 +379,8 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-            }));
+            }),
+            ));
         }
 
         // Stats Query Interface (Unix Socket, main.rs-specific)
@@ -374,22 +393,40 @@ async fn main() -> Result<()> {
                 let task_token = cancel_token.child_token();
                 let path = socket_path.clone();
 
-                orchestrated.handles.push(tokio::spawn(supervise(
+                let supervisor_name = name.clone();
+                orchestrated.tasks.push(NamedTask::new(
                     name,
-                    task_token.clone(),
-                    move || {
+                    tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
                         let rt = rt.clone();
                         let ep_st = ep_stats_for_server.clone();
                         let token = task_token.clone();
                         let p = path.clone();
                         async move { run_stats_server(p, rt, ep_st, token).await }
-                    },
-                )));
+                    })),
+                ));
             }
         }
 
         let mut reload = false;
-        let mut all_tasks = Box::pin(futures::future::join_all(orchestrated.handles));
+
+        // Snapshot task names + AbortHandles before consuming JoinHandles into
+        // the join_all future — needed to enumerate which tasks are still
+        // running if the shutdown budget expires.
+        let task_report: Vec<(String, tokio::task::AbortHandle)> = orchestrated
+            .tasks
+            .iter()
+            .map(|t| (t.name.clone(), t.handle.abort_handle()))
+            .collect();
+
+        let join_futures = orchestrated.tasks.into_iter().map(|t| {
+            let name = t.name;
+            let handle = t.handle;
+            async move {
+                let res = handle.await;
+                (name, res)
+            }
+        });
+        let mut all_tasks = Box::pin(futures::future::join_all(join_futures));
 
         loop {
             tokio::select! {
@@ -428,8 +465,35 @@ async fn main() -> Result<()> {
 
         cancel_token.cancel();
 
-        // Join all task handles with timeout (issue #9 - was just sleep(1s))
-        let _ = tokio::time::timeout(Duration::from_secs(5), all_tasks).await;
+        // Join all task handles with timeout (issue #9 - was just sleep(1s)).
+        // On timeout, use AbortHandle::is_finished() to report which tasks
+        // did not exit in time, then abort them so the process can exit.
+        match tokio::time::timeout(Duration::from_secs(5), all_tasks).await {
+            Ok(results) => {
+                for (name, res) in results {
+                    if let Err(e) = res {
+                        warn!("Task '{}' did not exit cleanly: {}", name, e);
+                    }
+                }
+            }
+            Err(_) => {
+                let remaining: Vec<&str> = task_report
+                    .iter()
+                    .filter(|(_, ah)| !ah.is_finished())
+                    .map(|(n, _)| n.as_str())
+                    .collect();
+                error!(
+                    "Shutdown timed out after 5s; {} task(s) still running: {:?}",
+                    remaining.len(),
+                    remaining
+                );
+                for (_, ah) in &task_report {
+                    if !ah.is_finished() {
+                        ah.abort();
+                    }
+                }
+            }
+        }
 
         if !reload {
             break;

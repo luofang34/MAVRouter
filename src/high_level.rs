@@ -29,13 +29,13 @@
 use crate::config::Config;
 use crate::endpoint_core::EndpointStats;
 use crate::error::{Result, RouterError};
+use crate::orchestration::{shutdown_with_timeout, NamedTask};
 use crate::router::{EndpointId, MessageBus};
 use crate::routing::RoutingTable;
 use parking_lot::RwLock;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -70,7 +70,7 @@ use tracing::info;
 /// ```
 pub struct Router {
     cancel_token: CancellationToken,
-    handles: Vec<JoinHandle<()>>,
+    tasks: Vec<NamedTask>,
     bus: MessageBus,
     routing_table: Arc<RwLock<RoutingTable>>,
     endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,
@@ -99,12 +99,12 @@ impl Router {
         info!(
             "Router started with {} endpoint(s) and {} background task(s)",
             config.endpoint.len(),
-            orchestrated.handles.len()
+            orchestrated.tasks.len()
         );
 
         Ok(Self {
             cancel_token,
-            handles: orchestrated.handles,
+            tasks: orchestrated.tasks,
             bus: orchestrated.bus,
             routing_table: orchestrated.routing_table,
             endpoint_stats: orchestrated.endpoint_stats,
@@ -144,8 +144,10 @@ impl Router {
 
     /// Gracefully stops the router and all its endpoints.
     ///
-    /// This method signals all tasks to stop and waits for them to complete.
-    /// Pending operations (like TLOG flushing) will be given time to finish.
+    /// Signals all tasks to stop and waits up to 5 seconds for them to
+    /// finish. If any task fails to exit within the budget, its name is
+    /// logged at `error!` and it is aborted so `stop()` is guaranteed to
+    /// return in bounded time even if a task is misbehaving.
     pub async fn stop(self) {
         info!("Router stopping...");
         self.cancel_token.cancel();
@@ -153,10 +155,7 @@ impl Router {
         // Give tasks time to flush and cleanup
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Wait for all handles to complete
-        for handle in self.handles {
-            let _ = handle.await;
-        }
+        shutdown_with_timeout(self.tasks, Duration::from_secs(5)).await;
 
         info!("Router stopped");
     }
