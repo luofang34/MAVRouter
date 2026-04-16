@@ -9,9 +9,21 @@
 //! - **Reliability**: Automatic endpoint restart, deduplication, filtering
 //! - **Performance**: 50ns routing lookup, 34kHz+ throughput tested
 //!
-//! ## Quick Start
+//! ## Public API surface
 //!
-//! The simplest way to use mavrouter as a library is with the high-level [`Router`] API:
+//! The library exposes a small, opinionated surface. For nearly every use
+//! case, the only items you need are:
+//!
+//! - [`Router`] — start, stop, and interact with a running router.
+//! - [`config::Config`] — parse or construct a configuration.
+//! - [`error::RouterError`] / [`error::Result`] — the crate's error type.
+//!
+//! Everything else is internal. If you find yourself wanting a type from
+//! one of the private submodules, open an issue so the missing capability
+//! can be added to the public surface instead of leaking implementation
+//! details.
+//!
+//! ## Quick Start
 //!
 //! ```no_run
 //! use mavrouter::Router;
@@ -41,76 +53,78 @@
 //!
 //! ## Configuration
 //!
-//! See [`config::Config`] for TOML configuration structure. You can also create
-//! configurations programmatically using [`config::Config::parse`] or the
-//! standard [`FromStr`](std::str::FromStr) trait.
-//!
-//! ## Re-exported Dependencies
-//!
-//! For convenience, commonly needed dependencies are re-exported:
-//!
-//! - [`CancellationToken`]: For graceful shutdown control
-//! - [`RwLock`]: Used by the routing table (from `parking_lot`)
-//!
-//! ## Architecture
-//!
-//! - [`Router`]: High-level API for starting and managing the router
-//! - [`router`]: Low-level message bus and routing primitives
-//! - [`routing`]: Intelligent routing table
-//! - [`endpoints`]: TCP/UDP/Serial endpoint implementations
-//! - [`filter`]: Per-endpoint message filtering
-//! - [`config`]: Configuration parsing and validation
+//! See [`config::Config`] for the TOML configuration structure. You can also
+//! create configurations programmatically via [`config::Config::parse`] or
+//! the standard [`FromStr`](std::str::FromStr) trait.
 
 #![deny(missing_docs)] // Enforce 100% documentation coverage (lib-only, not in Cargo.toml)
 
 /// Router configuration and parsing utilities.
 pub mod config;
-/// Core logic for generic endpoint operations.
-pub mod endpoint_core;
 /// Custom error types for structured error handling.
 pub mod error;
-mod high_level;
-/// Low-level task orchestration primitives: the [`orchestration::NamedTask`]
-/// handle pair, the shared [`orchestration::shutdown_with_timeout`] routine
-/// used by both the binary and the high-level `Router`, and the internal
-/// supervisor/spawning plumbing. Exposed so integration tests (and advanced
-/// embedders) can exercise the shutdown contract end-to-end.
-pub mod orchestration;
-/// Core message routing logic and types.
-pub mod router;
-/// Various MAVLink endpoint implementations (TCP, UDP, Serial, TLOG).
-pub mod endpoints {
-    /// Serial endpoint specific implementation.
-    pub mod serial;
-    /// TCP endpoint specific implementation.
-    pub mod tcp;
-    /// TLOG (Telemetry Log) endpoint for message recording.
-    pub mod tlog;
-    /// UDP endpoint specific implementation.
-    pub mod udp;
+
+// ---------------------------------------------------------------------------
+// Internal modules. All of these are `pub(crate)` by design: the crate's
+// public API is limited to `Router`, `Config`, and `error::*`. Tests live
+// inside these modules as `#[cfg(test)] mod tests;` so they have direct
+// access to internals; integration tests in `tests/` can only use the
+// public surface.
+// ---------------------------------------------------------------------------
+
+// `_internal` gates the handful of modules that the in-crate benchmarks
+// need direct access to. It is a *development-only* feature — not part of
+// the stable public contract — and must never be enabled by downstream
+// users. Each `[[bench]]` target sets `required-features = ["_internal"]`
+// so `cargo bench` turns it on automatically; every other build path sees
+// the strict `pub(crate)` visibility.
+
+pub(crate) mod dedup;
+pub(crate) mod endpoint_core;
+pub(crate) mod endpoints {
+    pub(crate) mod serial;
+    pub(crate) mod tcp;
+    pub(crate) mod tlog;
+    pub(crate) mod udp;
 }
-/// Message deduplication logic.
-pub mod dedup;
-/// Message filtering capabilities for endpoints.
+/// Per-endpoint message filtering. Exposed only under the `_internal`
+/// feature for benchmark access; not part of the public API.
+#[cfg(feature = "_internal")]
 pub mod filter;
-/// MAVLink message framing and parsing from byte streams.
-pub mod framing;
-/// Utility functions for MAVLink message processing.
+#[cfg(not(feature = "_internal"))]
+pub(crate) mod filter;
+pub(crate) mod framing;
+mod high_level;
+/// Low-level MAVLink message utilities. Exposed only under the `_internal`
+/// feature for benchmark access; not part of the public API.
+#[cfg(feature = "_internal")]
 pub mod mavlink_utils;
-/// Routing table implementation for MAVLink messages.
+#[cfg(not(feature = "_internal"))]
+pub(crate) mod mavlink_utils;
+pub(crate) mod orchestration;
+/// Message bus primitives. Exposed only under the `_internal` feature for
+/// benchmark access; not part of the public API. Use [`Router::bus`] instead.
+#[cfg(feature = "_internal")]
+pub mod router;
+#[cfg(not(feature = "_internal"))]
+pub(crate) mod router;
+/// Routing table internals. Exposed only under the `_internal` feature for
+/// benchmark access; not part of the public API. Query routing state via
+/// [`Router::routing_table`] or [`RoutingStats`] instead.
+#[cfg(feature = "_internal")]
 pub mod routing;
-/// Statistics history tracking and aggregation.
-pub mod stats;
-
-// Re-export commonly needed dependencies for library users.
-// This allows users to avoid adding these as direct dependencies
-// and ensures version compatibility.
-
-/// Re-export of `tokio_util::sync::CancellationToken` for graceful shutdown control.
-pub use tokio_util::sync::CancellationToken;
-
-/// Re-export of `parking_lot::RwLock` used by the routing table.
-pub use parking_lot::RwLock;
+#[cfg(not(feature = "_internal"))]
+pub(crate) mod routing;
 
 // Re-export the high-level Router API at crate root for convenience.
 pub use high_level::Router;
+
+// Supporting types reachable via `Router`'s public methods. These are
+// necessary — and minimal — because each one appears in the signature of
+// a `Router` accessor and downstream users would otherwise not be able to
+// name the return type. Any addition here widens the public API and
+// should go through the `cargo public-api` diff gate.
+pub use endpoint_core::{EndpointStats, EndpointStatsSnapshot};
+pub use mavlink_utils::MessageTarget;
+pub use router::{EndpointId, MessageBus, RoutedMessage};
+pub use routing::{RoutingStats, RoutingTable};

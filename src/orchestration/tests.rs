@@ -1,56 +1,132 @@
-//! Stress test for the routing-table updater path.
-//!
-//! Verifies the concurrency claim that motivated this design: the routing
-//! hot path must **not** block a tokio worker thread. The old code took
-//! `RwLock::write()` as a fallback when `try_write()` failed, which could
-//! starve unrelated tasks under contention. The current design routes all
-//! route observations through an mpsc channel consumed by a single
-//! [`mavrouter::orchestration::spawn_routing_updater`] task, so writers on
-//! the async side only ever do non-blocking `try_send`.
-//!
-//! This test:
-//!   - spawns 20 writer tasks and 20 reader tasks,
-//!   - lets them hammer the routing table for 10 seconds,
-//!   - asserts every single task made *substantial* progress.
-//!
-//! If any task's tick counter is still tiny at the end (i.e. it was
-//! starved while others ran), the test fails.
+//! Unit tests for the orchestration-layer primitives: the shutdown
+//! helper's behaviour when tasks are cooperative vs. stuck, and the
+//! routing updater's ability to keep async tasks unstarved under
+//! contention.
 
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::arithmetic_side_effects)]
 
+use super::*;
+use crate::router::EndpointId;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use mavrouter::orchestration::spawn_routing_updater;
-use mavrouter::router::EndpointId;
-use mavrouter::routing::{RouteUpdate, RoutingTable};
-use parking_lot::RwLock;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tracing_test::traced_test;
+
+// ============================================================================
+// shutdown_with_timeout
+// ============================================================================
+
+fn spawn_stuck_task(name: &str) -> NamedTask {
+    let handle = tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    });
+    NamedTask::new(name, handle)
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[traced_test]
+async fn shutdown_with_timeout_reports_and_aborts_stuck_tasks() {
+    let stuck = spawn_stuck_task("Stuck Task A");
+    let abort_handle = stuck.handle.abort_handle();
+
+    let start = Instant::now();
+    let clean_exit = shutdown_with_timeout(vec![stuck], Duration::from_millis(500)).await;
+    let elapsed = start.elapsed();
+
+    assert!(
+        !clean_exit,
+        "timeout path must report !clean_exit, got true after {:?}",
+        elapsed
+    );
+    // Public contract is "returns within 6 seconds"; the 500ms budget used
+    // here is strictly tighter so the assertion still binds.
+    assert!(
+        elapsed < Duration::from_secs(6),
+        "shutdown_with_timeout must return within 6s even for stuck tasks, took {:?}",
+        elapsed
+    );
+    assert!(
+        logs_contain("Shutdown timed out"),
+        "expected an error log containing 'Shutdown timed out'"
+    );
+    assert!(
+        logs_contain("Stuck Task A"),
+        "expected the stuck task name to be enumerated in the timeout log"
+    );
+
+    for _ in 0..20 {
+        if abort_handle.is_finished() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        abort_handle.is_finished(),
+        "stuck task should have been aborted after the timeout"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[traced_test]
+async fn shutdown_with_timeout_is_fast_path_for_cooperative_tasks() {
+    let token = CancellationToken::new();
+    let cooperative_token = token.clone();
+    let cooperative = NamedTask::new(
+        "Cooperative Task",
+        tokio::spawn(async move {
+            cooperative_token.cancelled().await;
+        }),
+    );
+
+    token.cancel();
+
+    let start = Instant::now();
+    let clean_exit = shutdown_with_timeout(vec![cooperative], Duration::from_secs(5)).await;
+    let elapsed = start.elapsed();
+
+    assert!(clean_exit, "cooperative task must hit the Ok branch");
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "cooperative shutdown should finish well inside the budget, took {:?}",
+        elapsed
+    );
+    assert!(
+        !logs_contain("Shutdown timed out"),
+        "no timeout log should be emitted when all tasks exit cleanly"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn shutdown_with_timeout_is_noop_for_empty_task_list() {
+    let start = Instant::now();
+    let clean_exit = shutdown_with_timeout(Vec::new(), Duration::from_millis(1)).await;
+    assert!(clean_exit);
+    assert!(start.elapsed() < Duration::from_millis(50));
+}
+
+// ============================================================================
+// spawn_routing_updater contention / fairness
+// ============================================================================
 
 const WRITER_COUNT: usize = 20;
 const READER_COUNT: usize = 20;
 const RUN_DURATION: Duration = Duration::from_secs(10);
 
-/// Minimum number of ticks we demand from every single task. With a 10s
-/// budget and per-iteration work measured in microseconds (an mpsc
-/// `try_send` for writers, a parking_lot read + a couple of HashMap lookups
-/// for readers), each task should easily clear many thousands of ticks. We
-/// pick 1_000 to stay far above any noise floor but still be robust to a
-/// slow CI runner. If any task falls below this, the scheduler was
-/// starving it — which is exactly the regression we're guarding against.
+// Per-task floor — with a 10s budget and work measured in microseconds per
+// iteration, each task should clear many thousands of ticks. 1_000 is above
+// any scheduler noise and a long way from the aggregate throughput the
+// whole fleet actually hits; any task below that was being starved.
 const MIN_TICKS_PER_TASK: u64 = 1_000;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn routing_writer_and_reader_fairness_under_contention() {
-    let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
     let (update_tx, update_rx) = mpsc::channel::<RouteUpdate>(4096);
     let cancel = CancellationToken::new();
 
-    // Single updater task owns all writes — exactly the production topology.
     let updater = spawn_routing_updater(
         routing_table.clone(),
         update_rx,
@@ -59,7 +135,6 @@ async fn routing_writer_and_reader_fairness_under_contention() {
         cancel.child_token(),
     );
 
-    // Per-task progress counters; final assertions read these.
     let writer_ticks: Vec<Arc<AtomicU64>> = (0..WRITER_COUNT)
         .map(|_| Arc::new(AtomicU64::new(0)))
         .collect();
@@ -69,9 +144,6 @@ async fn routing_writer_and_reader_fairness_under_contention() {
 
     let mut handles = Vec::new();
 
-    // Writers: each claims its own EndpointId and cycles through sys_ids,
-    // submitting updates via the same mpsc the production hot path uses.
-    // `try_send` — *never* blocks, which is the invariant under test.
     for (i, ticks) in writer_ticks.iter().enumerate() {
         let tx = update_tx.clone();
         let ticks = ticks.clone();
@@ -86,26 +158,18 @@ async fn routing_writer_and_reader_fairness_under_contention() {
                     comp_id: 1,
                     now: Instant::now(),
                 };
-                // We don't care whether the channel is momentarily full;
-                // the test is asserting *our* task kept making progress,
-                // not that every update landed.
+                // try_send never blocks — full queue = drop + retry next tick.
                 tx.try_send(update).ok();
                 ticks.fetch_add(1, Ordering::Relaxed);
                 sys_id = sys_id.wrapping_add(1);
                 if sys_id == 0 {
                     sys_id = 1;
                 }
-                // Yield so the tokio runtime can schedule other tasks —
-                // without this, a single-threaded runtime could let one
-                // writer hog the worker and make the starvation check
-                // false-pass trivially.
                 tokio::task::yield_now().await;
             }
         }));
     }
 
-    // Readers: take a read lock, make a routing decision, release. This is
-    // the same access pattern as `check_outgoing` on the hot path.
     for (i, ticks) in reader_ticks.iter().enumerate() {
         let rt = routing_table.clone();
         let ticks = ticks.clone();
@@ -118,7 +182,6 @@ async fn routing_writer_and_reader_fairness_under_contention() {
                     let guard = rt.read();
                     guard.should_send(endpoint_id, sys_id, 1)
                 };
-                // Touch the decision so the optimiser can't delete the read.
                 std::hint::black_box(decision);
                 ticks.fetch_add(1, Ordering::Relaxed);
                 sys_id = sys_id.wrapping_add(1);
@@ -133,18 +196,14 @@ async fn routing_writer_and_reader_fairness_under_contention() {
     tokio::time::sleep(RUN_DURATION).await;
     cancel.cancel();
 
-    // Reap everyone. We allow a small grace window for tasks to observe
-    // cancellation and return — they don't hold any resources that matter.
     for h in handles {
         tokio::time::timeout(Duration::from_secs(2), h).await.ok();
     }
-    // Close the update channel so the updater can exit too.
     drop(update_tx);
     tokio::time::timeout(Duration::from_secs(2), updater.handle)
         .await
         .ok();
 
-    // Starvation check: every single task must have cleared MIN_TICKS.
     for (i, ticks) in writer_ticks.iter().enumerate() {
         let v = ticks.load(Ordering::Relaxed);
         assert!(
@@ -166,9 +225,6 @@ async fn routing_writer_and_reader_fairness_under_contention() {
         );
     }
 
-    // Sanity check: aggregate throughput should be *much* higher than the
-    // per-task floor. If we only cleared the floor, something is wrong
-    // even though no individual task is "starving".
     let writer_total: u64 = writer_ticks.iter().map(|a| a.load(Ordering::Relaxed)).sum();
     let reader_total: u64 = reader_ticks.iter().map(|a| a.load(Ordering::Relaxed)).sum();
     assert!(
@@ -182,8 +238,6 @@ async fn routing_writer_and_reader_fairness_under_contention() {
         reader_total
     );
 
-    // And routing-table state should actually have changed — otherwise the
-    // mpsc→updater path wasn't doing anything.
     let stats = routing_table.read().stats();
     assert!(
         stats.total_systems > 0,

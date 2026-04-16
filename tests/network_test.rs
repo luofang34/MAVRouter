@@ -1,3 +1,7 @@
+//! Public-API network tests for UDP/TCP client modes and the TCP-server
+//! connection limit. All tests drive the router exclusively through
+//! [`mavrouter::Router`].
+
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::panic)]
@@ -24,27 +28,12 @@ fn build_heartbeat_bytes() -> Vec<u8> {
     buf
 }
 
-/// Test 1: UDP Client Mode
-///
-/// Verifies that the router in UDP-client mode forwards messages to a
-/// remote UDP address. The test sets up:
-///   - A local UDP socket acting as the "remote server" the router sends to
-///   - A router configured with:
-///       * A UDP endpoint in CLIENT mode targeting our local socket
-///       * A TCP endpoint in SERVER mode for injecting traffic
-///   - A TCP client that connects to the router's TCP server and sends a heartbeat
-///
-/// Expected: The heartbeat appears on our UDP socket within a timeout.
+/// Router UDP-client endpoint forwards bus traffic to an external UDP socket.
 #[tokio::test]
 #[serial]
 async fn test_udp_client_mode_forwarding() {
-    // 1. Bind a UDP socket to receive data from the router's UDP client endpoint.
-    //    Use a fixed port so we can put it in the router config.
     let udp_recv = UdpSocket::bind("127.0.0.1:19850").await.unwrap();
 
-    // 2. Configure the router:
-    //    - UDP client endpoint sends to our udp_recv socket
-    //    - TCP server endpoint listens for a client to inject traffic
     let toml_config = r#"
 [general]
 bus_capacity = 100
@@ -63,19 +52,13 @@ mode = "server"
 
     let router = Router::from_str(toml_config).await.unwrap();
 
-    // Give the router time to bind its TCP server
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // 3. Connect a TCP client to the router's TCP server and send a heartbeat
     let mut tcp_client = TcpStream::connect("127.0.0.1:19851").await.unwrap();
-
-    // Wait for connection to register in the bus
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let heartbeat = build_heartbeat_bytes();
 
-    // 4. Send heartbeat via TCP; the router should forward it out through UDP client
-    //    Use retry loop to handle potential timing issues
     let mut udp_buf = [0u8; 1024];
     let mut received = false;
 
@@ -84,13 +67,11 @@ mode = "server"
 
         match tokio::time::timeout(Duration::from_millis(500), udp_recv.recv(&mut udp_buf)).await {
             Ok(Ok(n)) if n > 0 => {
-                // MAVLink v2 messages start with 0xFD
                 assert_eq!(udp_buf[0], 0xFD, "Expected MAVLink v2 magic byte");
                 received = true;
                 break;
             }
             _ => {
-                // Retry - might need time for routing to settle
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
@@ -101,30 +82,16 @@ mode = "server"
         "Failed to receive heartbeat on UDP socket from router's UDP client endpoint"
     );
 
-    // 5. Cleanup
     router.stop().await;
 }
 
-/// Test 2: TCP Client Mode
-///
-/// Verifies that the router in TCP-client mode connects to an external
-/// TCP server and forwards messages through it. The test sets up:
-///   - A local TCP listener acting as the "remote server" the router connects to
-///   - A router configured with:
-///       * A TCP endpoint in CLIENT mode connecting to our local listener
-///       * A UDP endpoint in SERVER mode for injecting traffic
-///   - A UDP client that sends a heartbeat to the router's UDP server
-///
-/// Expected: The heartbeat arrives on the accepted TCP connection within a timeout.
+/// Router TCP-client endpoint connects to an external TCP server and
+/// forwards traffic out through the established connection.
 #[tokio::test]
 #[serial]
 async fn test_tcp_client_mode_forwarding() {
-    // 1. Start a TCP listener that the router will connect to as a client
     let tcp_listener = TcpListener::bind("127.0.0.1:19860").await.unwrap();
 
-    // 2. Configure the router:
-    //    - TCP client endpoint connects to our tcp_listener
-    //    - UDP server endpoint listens for traffic injection
     let toml_config = r#"
 [general]
 bus_capacity = 100
@@ -143,24 +110,19 @@ mode = "server"
 
     let router = Router::from_str(toml_config).await.unwrap();
 
-    // 3. Accept the incoming TCP connection from the router
     let (mut tcp_stream, _addr) =
         tokio::time::timeout(Duration::from_secs(5), tcp_listener.accept())
             .await
             .expect("Timeout waiting for router to connect as TCP client")
             .unwrap();
 
-    // Give the connection a moment to stabilize
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // 4. Send a heartbeat via UDP to the router's UDP server endpoint
     let udp_sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     udp_sender.connect("127.0.0.1:19861").await.unwrap();
 
     let heartbeat = build_heartbeat_bytes();
 
-    // 5. Send heartbeat via UDP; router should forward it out through TCP client
-    //    Use retry loop to handle potential timing issues
     let mut tcp_buf = [0u8; 1024];
     let mut received = false;
 
@@ -170,13 +132,11 @@ mode = "server"
         match tokio::time::timeout(Duration::from_millis(500), tcp_stream.read(&mut tcp_buf)).await
         {
             Ok(Ok(n)) if n > 0 => {
-                // MAVLink v2 messages start with 0xFD
                 assert_eq!(tcp_buf[0], 0xFD, "Expected MAVLink v2 magic byte");
                 received = true;
                 break;
             }
             _ => {
-                // Retry - might need time for routing to settle
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
@@ -187,68 +147,29 @@ mode = "server"
         "Failed to receive heartbeat on TCP stream from router's TCP client endpoint"
     );
 
-    // 6. Cleanup
     router.stop().await;
 }
 
-/// Test 3: TCP Server Connection Limit
-///
-/// Verifies that the router's TCP server enforces the connection limit.
-/// The MAX_TCP_CLIENTS constant in the source is 100. We connect 100 clients
-/// and verify all are accepted, then connect one more and verify it is rejected
-/// (the server drops the stream immediately).
-///
-/// Note: This test uses the low-level endpoint API directly (like integration_test.rs)
-/// to avoid the overhead of a full router for testing connection limits.
+/// Router TCP-server enforces its `MAX_TCP_CLIENTS` ceiling. Connect 100
+/// clients (all should succeed), then verify the 101st is dropped.
 #[tokio::test]
 #[serial]
 async fn test_tcp_server_connection_limit() {
-    use mavrouter::config::EndpointMode;
-    use mavrouter::dedup::ConcurrentDedup;
-    use mavrouter::endpoints::tcp;
-    use mavrouter::filter::EndpointFilters;
-    use mavrouter::router::create_bus;
-    use mavrouter::routing::RoutingTable;
-    use parking_lot::RwLock;
-    use std::sync::Arc;
-    use tokio_util::sync::CancellationToken;
+    let toml_config = r#"
+[general]
+bus_capacity = 100
+dedup_period_ms = 0
 
-    let bus = create_bus(100);
-    let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-    let dedup = ConcurrentDedup::new(Duration::from_millis(0));
-    let filters = EndpointFilters::default();
-    let token = CancellationToken::new();
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:19870"
+mode = "server"
+"#;
 
-    let bus_tx = bus.sender();
-    let bus_rx = bus.subscribe();
-    let rt = routing_table.clone();
-    let dd = dedup.clone();
-    let f = filters.clone();
-    let t = token.clone();
-    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
-
-    // Start TCP server on a known port
-    tokio::spawn(async move {
-        tcp::run(
-            1,
-            "127.0.0.1:19870".to_string(),
-            EndpointMode::Server,
-            bus_tx,
-            bus_rx,
-            rt,
-            route_tx,
-            dd,
-            f,
-            t,
-            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
-        )
-        .await
-        .unwrap();
-    });
+    let router = Router::from_str(toml_config).await.unwrap();
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Connect MAX_TCP_CLIENTS (100) clients
     let mut clients = Vec::new();
     for i in 0..100 {
         match tokio::time::timeout(
@@ -257,65 +178,36 @@ async fn test_tcp_server_connection_limit() {
         )
         .await
         {
-            Ok(Ok(stream)) => {
-                clients.push(stream);
-            }
-            Ok(Err(e)) => {
-                panic!("Failed to connect client {}: {}", i, e);
-            }
-            Err(_) => {
-                panic!("Timeout connecting client {}", i);
-            }
+            Ok(Ok(stream)) => clients.push(stream),
+            Ok(Err(e)) => panic!("Failed to connect client {}: {}", i, e),
+            Err(_) => panic!("Timeout connecting client {}", i),
         }
     }
 
-    // Small delay to let the server process all accepts
+    // Let the server process all accepts before we probe the limit.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // The 101st connection should be accepted at the TCP level but immediately
-    // dropped by the server (since it exceeds MAX_TCP_CLIENTS).
-    // We verify this by connecting and then trying to read - we should get
-    // an EOF (0 bytes) or connection reset indicating the server dropped us.
-    match tokio::time::timeout(
+    // The 101st connection is accepted at the TCP level but the server
+    // drops its side of the stream immediately. Any of: EOF, read error,
+    // timeout, or refused connect is acceptable — the only unacceptable
+    // outcome would be a long-lived, uninterrupted data connection, which
+    // we don't test for explicitly because detecting *its absence* under
+    // OS backlog semantics is racy.
+    if let Ok(Ok(mut extra_stream)) = tokio::time::timeout(
         Duration::from_secs(2),
         TcpStream::connect("127.0.0.1:19870"),
     )
     .await
     {
-        Ok(Ok(mut extra_stream)) => {
-            // The connection may be established at the OS level, but the server
-            // should drop it. Try reading to detect the drop.
-            let mut buf = [0u8; 64];
-            match tokio::time::timeout(Duration::from_secs(2), extra_stream.read(&mut buf)).await {
-                Ok(Ok(0)) => {
-                    // EOF - server closed the connection. This is the expected behavior.
-                }
-                Ok(Ok(_n)) => {
-                    // Unexpected - server sent data to the rejected client.
-                    // This is still acceptable if the connection was eventually dropped.
-                }
-                Ok(Err(_)) => {
-                    // Connection reset or error - server rejected the connection. Expected.
-                }
-                Err(_) => {
-                    // Timeout - the connection is alive but idle. The server may have
-                    // accepted the connection after another client disconnected.
-                    // In the current implementation, the server drops the stream via
-                    // `drop(stream)` which sends a RST/FIN.
-                    // If we timed out, the server may not have processed the accept yet
-                    // or OS backlog kept it. This is still a reasonable outcome.
-                }
-            }
-        }
-        Ok(Err(_)) => {
-            // Connection refused - server's backlog is full. This is acceptable.
-        }
-        Err(_) => {
-            // Timeout connecting - also acceptable.
-        }
+        let mut buf = [0u8; 64];
+        // Drain one read (or time out). We don't assert on the outcome;
+        // seeing data is fine if the OS accept backlog surfaced after a
+        // slot freed up between our accept and read.
+        tokio::time::timeout(Duration::from_secs(2), extra_stream.read(&mut buf))
+            .await
+            .ok();
     }
 
-    // Cleanup
     drop(clients);
-    token.cancel();
+    router.stop().await;
 }

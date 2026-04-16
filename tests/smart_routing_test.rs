@@ -1,40 +1,26 @@
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
-#![allow(clippy::indexing_slicing)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::arithmetic_side_effects)]
-
-//! End-to-end routing tests
+//! Intelligent routing behaviour through the public [`Router`] API.
 //!
-//! These tests verify that intelligent routing works correctly:
-//! - Messages only go to endpoints that have seen the target system
-//! - Broadcast messages go to all endpoints
-//! - Component-specific routing works
+//! These tests stand up a `Router` with multiple TCP-server endpoints,
+//! have each client "announce" itself by sending a HEARTBEAT (which the
+//! router learns into its routing table), then send a targeted command
+//! and assert only the intended recipient sees it.
+
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::indexing_slicing)]
 
 use mavlink::{MavHeader, Message};
-use mavrouter::config::EndpointMode;
-use mavrouter::dedup::ConcurrentDedup;
-use mavrouter::endpoints::tcp;
-use mavrouter::filter::EndpointFilters;
-use mavrouter::router::create_bus;
-use mavrouter::routing::RoutingTable;
-use parking_lot::RwLock;
+use mavrouter::Router;
 use serial_test::serial;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_util::sync::CancellationToken;
 
-async fn read_mavlink_message(
-    client: &mut TcpStream,
-) -> Option<(MavHeader, mavlink::common::MavMessage)> {
+async fn read_mavlink(client: &mut TcpStream) -> Option<(MavHeader, mavlink::common::MavMessage)> {
     let mut buf = [0u8; 1024];
     match tokio::time::timeout(Duration::from_secs(1), client.read(&mut buf)).await {
         Ok(Ok(n)) if n > 0 => {
             let mut cursor = std::io::Cursor::new(&buf[..n]);
-            // Try V2 then V1
             mavlink::read_v2_msg(&mut cursor)
                 .or_else(|_| {
                     cursor.set_position(0);
@@ -46,218 +32,21 @@ async fn read_mavlink_message(
     }
 }
 
-#[tokio::test]
-#[serial]
-async fn test_targeted_message_routing() {
-    let bus = create_bus(100);
-    let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-    let dedup = ConcurrentDedup::new(Duration::from_millis(0));
-    let filters = EndpointFilters::default();
-    let token = CancellationToken::new();
-
-    // Spawn the routing updater so submitted RouteUpdates actually land in
-    // the shared routing table — this test depends on learned routes to
-    // deliver targeted messages.
-    let (route_update_tx, route_update_rx) =
-        tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(1024);
-    let _updater = mavrouter::orchestration::spawn_routing_updater(
-        routing_table.clone(),
-        route_update_rx,
-        Duration::from_secs(300),
-        Duration::from_secs(60),
-        token.child_token(),
-    );
-
-    // Start 3 TCP endpoints, all feeding the same updater.
-    for i in 1..=3 {
-        let bus_tx = bus.sender();
-        let bus_rx = bus.subscribe();
-        let rt = routing_table.clone();
-        let dd = dedup.clone();
-        let f = filters.clone();
-        let t = token.clone();
-        let port = 16000 + i;
-        let route_tx = route_update_tx.clone();
-
-        tokio::spawn(async move {
-            tcp::run(
-                i,
-                format!("127.0.0.1:{}", port),
-                EndpointMode::Server,
-                bus_tx,
-                bus_rx,
-                rt,
-                route_tx,
-                dd,
-                f,
-                t,
-                std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
-            )
-            .await
-            .unwrap();
-        });
-    }
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let mut client1 = TcpStream::connect("127.0.0.1:16001").await.unwrap();
-    let mut client2 = TcpStream::connect("127.0.0.1:16002").await.unwrap();
-    let mut client3 = TcpStream::connect("127.0.0.1:16003").await.unwrap();
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // Step 1: Clients announce themselves
-    let hb1 = MavHeader {
-        system_id: 1,
-        component_id: 1,
-        sequence: 0,
-    };
-    let msg1 = mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
-    let mut buf1 = Vec::new();
-    mavlink::write_v2_msg(&mut buf1, hb1, &msg1).unwrap();
-    client1.write_all(&buf1).await.unwrap();
-
-    let hb2 = MavHeader {
-        system_id: 2,
-        component_id: 1,
-        sequence: 0,
-    };
-    let msg2 = mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
-    let mut buf2 = Vec::new();
-    mavlink::write_v2_msg(&mut buf2, hb2, &msg2).unwrap();
-    client2.write_all(&buf2).await.unwrap();
-
-    let hb3 = MavHeader {
-        system_id: 3,
-        component_id: 1,
-        sequence: 0,
-    };
-    let msg3 = mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
-    let mut buf3 = Vec::new();
-    mavlink::write_v2_msg(&mut buf3, hb3, &msg3).unwrap();
-    client3.write_all(&buf3).await.unwrap();
-
-    // Wait for routing table to learn and drain heartbeats
-    tokio::time::sleep(Duration::from_millis(300)).await;
-
-    // Drain initial broadcasts from ALL clients
-    while client1.try_read(&mut [0u8; 1024]).is_ok() {}
-    while client2.try_read(&mut [0u8; 1024]).is_ok() {}
-    while client3.try_read(&mut [0u8; 1024]).is_ok() {}
-
-    // Step 2: Send TARGETED message from Client 1 to System 2
-    let cmd = mavlink::common::COMMAND_LONG_DATA {
-        target_system: 2, // ← TARGETED!
-        target_component: 1,
-        command: mavlink::common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
-        confirmation: 0,
-        param1: 1.0,
-        param2: 0.0,
-        param3: 0.0,
-        param4: 0.0,
-        param5: 0.0,
-        param6: 0.0,
-        param7: 0.0,
-    };
-    let cmd_header = MavHeader {
-        system_id: 1,
-        component_id: 1,
-        sequence: 1,
-    };
-    let mut cmd_buf = Vec::new();
-    mavlink::write_v2_msg(
-        &mut cmd_buf,
-        cmd_header,
-        &mavlink::common::MavMessage::COMMAND_LONG(cmd),
-    )
-    .unwrap();
-
-    client1.write_all(&cmd_buf).await.unwrap();
-
-    // Step 3: Verify routing
-
-    // Client 2 SHOULD receive (targeted to sys 2)
-    let (header, msg) = read_mavlink_message(&mut client2)
-        .await
-        .expect("Client 2 should receive message");
-
-    assert_eq!(header.system_id, 1, "Source is system 1");
-    assert_eq!(msg.message_id(), 76, "Should be COMMAND_LONG");
-
-    // Client 3 should NOT receive (not targeted)
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let result3 = client3.try_read(&mut [0u8; 1024]);
-    if let Ok(n) = result3 {
-        assert_eq!(
-            n, 0,
-            "Client 3 should NOT receive message targeted to sys 2"
-        );
-    }
-
-    // Client 1 should NOT receive (it's the sender)
-    let result1 = client1.try_read(&mut [0u8; 1024]);
-    if let Ok(n) = result1 {
-        assert_eq!(n, 0, "Client 1 should not receive its own message");
-    }
-}
-
-#[tokio::test]
-#[serial]
-async fn test_unknown_target_dropped() {
-    let bus = create_bus(100);
-    let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-    let dedup = ConcurrentDedup::new(Duration::from_millis(0));
-    let filters = EndpointFilters::default();
-    let token = CancellationToken::new();
-
-    // Only 1 endpoint
-    let bus_tx = bus.sender();
-    let bus_rx = bus.subscribe();
-    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
-    tokio::spawn({
-        let rt = routing_table.clone();
-        let dd = dedup.clone();
-        let f = filters.clone();
-        let t = token.clone();
-        async move {
-            tcp::run(
-                1,
-                "127.0.0.1:16010".to_string(),
-                EndpointMode::Server,
-                bus_tx,
-                bus_rx,
-                rt,
-                route_tx,
-                dd,
-                f,
-                t,
-                std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
-            )
-            .await
-            .unwrap();
-        }
-    });
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let mut client = TcpStream::connect("127.0.0.1:16010").await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // Client announces as system 1
-    let hb = MavHeader {
-        system_id: 1,
+fn heartbeat_bytes(system_id: u8) -> Vec<u8> {
+    let header = MavHeader {
+        system_id,
         component_id: 1,
         sequence: 0,
     };
     let msg = mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
     let mut buf = Vec::new();
-    mavlink::write_v2_msg(&mut buf, hb, &msg).unwrap();
-    client.write_all(&buf).await.unwrap();
+    mavlink::write_v2_msg(&mut buf, header, &msg).unwrap();
+    buf
+}
 
-    tokio::time::sleep(Duration::from_millis(300)).await;
-
-    // Send command to UNKNOWN system 200
+fn command_long_bytes(target_sys: u8, source_sys: u8) -> Vec<u8> {
     let cmd = mavlink::common::COMMAND_LONG_DATA {
-        target_system: 200, // ← Unknown!
+        target_system: target_sys,
         target_component: 1,
         command: mavlink::common::MavCmd::MAV_CMD_COMPONENT_ARM_DISARM,
         confirmation: 0,
@@ -269,31 +58,128 @@ async fn test_unknown_target_dropped() {
         param6: 0.0,
         param7: 0.0,
     };
-    let cmd_header = MavHeader {
-        system_id: 1,
+    let header = MavHeader {
+        system_id: source_sys,
         component_id: 1,
         sequence: 1,
     };
-    let mut cmd_buf = Vec::new();
+    let mut buf = Vec::new();
     mavlink::write_v2_msg(
-        &mut cmd_buf,
-        cmd_header,
+        &mut buf,
+        header,
         &mavlink::common::MavMessage::COMMAND_LONG(cmd),
     )
     .unwrap();
+    buf
+}
 
-    client.write_all(&cmd_buf).await.unwrap();
+#[tokio::test]
+#[serial]
+async fn test_targeted_message_routing() {
+    let toml = r#"
+[general]
+bus_capacity = 100
+dedup_period_ms = 0
 
-    // Wait and verify no message comes back
-    tokio::time::sleep(Duration::from_millis(500)).await;
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:16001"
+mode = "server"
 
-    let mut discard = [0u8; 1024];
-    let result = client.try_read(&mut discard);
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:16002"
+mode = "server"
 
-    if let Ok(n) = result {
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:16003"
+mode = "server"
+"#;
+
+    let router = Router::from_str(toml).await.expect("router should start");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let mut client1 = TcpStream::connect("127.0.0.1:16001").await.unwrap();
+    let mut client2 = TcpStream::connect("127.0.0.1:16002").await.unwrap();
+    let mut client3 = TcpStream::connect("127.0.0.1:16003").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Each client announces a unique system id so the router learns where
+    // each MAVLink system lives.
+    client1.write_all(&heartbeat_bytes(1)).await.unwrap();
+    client2.write_all(&heartbeat_bytes(2)).await.unwrap();
+    client3.write_all(&heartbeat_bytes(3)).await.unwrap();
+
+    // Let the routing updater absorb the heartbeats and drain any broadcast
+    // echoes that landed on the other sockets.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    while client1.try_read(&mut [0u8; 1024]).is_ok() {}
+    while client2.try_read(&mut [0u8; 1024]).is_ok() {}
+    while client3.try_read(&mut [0u8; 1024]).is_ok() {}
+
+    // Targeted COMMAND_LONG from client1 to system 2.
+    client1.write_all(&command_long_bytes(2, 1)).await.unwrap();
+
+    let (header, msg) = read_mavlink(&mut client2)
+        .await
+        .expect("client2 should receive the targeted command");
+    assert_eq!(header.system_id, 1, "source is system 1");
+    assert_eq!(msg.message_id(), 76, "COMMAND_LONG message id");
+
+    // client3 must NOT receive it.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    if let Ok(n) = client3.try_read(&mut [0u8; 1024]) {
         assert_eq!(
             n, 0,
-            "Message to unknown system should be dropped/not echoed"
+            "client3 should not see a command targeted at system 2"
         );
     }
+
+    // Sender must not receive its own message echoed.
+    if let Ok(n) = client1.try_read(&mut [0u8; 1024]) {
+        assert_eq!(n, 0, "client1 should not see its own command");
+    }
+
+    router.stop().await;
+}
+
+#[tokio::test]
+#[serial]
+async fn test_unknown_target_dropped() {
+    let toml = r#"
+[general]
+bus_capacity = 100
+dedup_period_ms = 0
+
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:16010"
+mode = "server"
+"#;
+
+    let router = Router::from_str(toml).await.expect("router should start");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let mut client = TcpStream::connect("127.0.0.1:16010").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Client announces as system 1.
+    client.write_all(&heartbeat_bytes(1)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Drain own heartbeat echo (if any).
+    while client.try_read(&mut [0u8; 1024]).is_ok() {}
+
+    // Send a command targeted at an unknown system (200). Because we're
+    // the only endpoint and we don't claim to have seen system 200, the
+    // router should drop it.
+    client.write_all(&command_long_bytes(200, 1)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    if let Ok(n) = client.try_read(&mut [0u8; 1024]) {
+        assert_eq!(n, 0, "message to unknown system should be dropped");
+    }
+
+    router.stop().await;
 }

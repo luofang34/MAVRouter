@@ -77,22 +77,17 @@ impl MessageBus {
 /// # Returns
 ///
 /// A `MessageBus` instance containing the sender (subscribers are created from it).
-///
-/// # Example
-///
-/// ```
-/// use mavrouter::router;
-///
-/// let bus = router::create_bus(1000);
-/// // Endpoints can now subscribe to this bus
-/// ```
 pub fn create_bus(capacity: usize) -> MessageBus {
     let (tx, _rx) = broadcast::channel(capacity);
     MessageBus { tx }
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
+#[allow(
+    clippy::expect_used,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 mod tests {
     use super::*;
 
@@ -120,5 +115,34 @@ mod tests {
 
         let received = rx.recv().await.expect("Failed to receive test message");
         assert_eq!(received.source_id, EndpointId(1));
+    }
+
+    /// Sending with no subscribers must not panic when the channel backlog
+    /// overflows its bounded capacity.
+    #[tokio::test]
+    async fn test_message_bus_overflow() {
+        let bus = create_bus(10);
+        let tx = bus.sender();
+
+        for i in 0..100 {
+            let msg = RoutedMessage {
+                source_id: EndpointId(0),
+                header: MavHeader {
+                    system_id: 1,
+                    component_id: 1,
+                    sequence: i as u8,
+                },
+                message_id: 0,
+                version: MavlinkVersion::V2,
+                timestamp_us: 0,
+                serialized_bytes: Bytes::from_static(b"test"),
+                target: MessageTarget {
+                    system_id: 0,
+                    component_id: 0,
+                },
+            };
+            tx.send(msg).ok();
+        }
+        // Reaching here without panic is the assertion.
     }
 }

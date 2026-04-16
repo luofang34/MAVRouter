@@ -1,221 +1,128 @@
+//! End-to-end network integration tests driven entirely through the public
+//! [`mavrouter::Router`] API. No internal endpoint types are referenced.
+
+#![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::indexing_slicing)]
 
 use mavlink::MavHeader;
-use mavrouter::config::EndpointMode;
-use mavrouter::dedup::ConcurrentDedup;
-use mavrouter::endpoints::{tcp, udp};
-use mavrouter::filter::EndpointFilters;
-use mavrouter::router::create_bus;
-use mavrouter::routing::RoutingTable;
-use parking_lot::RwLock;
+use mavrouter::Router;
 use serial_test::serial;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
-use tokio_util::sync::CancellationToken;
 
-#[tokio::test]
-#[serial]
-async fn test_udp_echo() {
-    // ... (Existing UDP test logic, assuming it was correct) ...
-    // I'll copy-paste the working part to ensure file consistency or just overwrite the whole file.
-    // Since I am overwriting, I must include test_udp_echo content.
-
-    let bus = create_bus(100);
-    let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-    let dedup = ConcurrentDedup::new(Duration::from_millis(0));
-    let filters = EndpointFilters::default();
-    let token = CancellationToken::new();
-
-    let bus_tx = bus.sender();
-    let bus_rx = bus.subscribe();
-    let rt = routing_table.clone();
-    let dd = dedup.clone();
-    let f = filters.clone();
-    let t = token.clone();
-    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
-
-    tokio::spawn(async move {
-        udp::run(
-            1,
-            "127.0.0.1:14550".to_string(),
-            EndpointMode::Server,
-            bus_tx,
-            bus_rx,
-            rt,
-            route_tx,
-            dd,
-            f,
-            t,
-            300,
-            5,
-            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
-        )
-        .await
-        .unwrap();
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    socket.connect("127.0.0.1:14550").await.unwrap();
-
+/// Build a MAVLink v2 HEARTBEAT as raw bytes.
+fn heartbeat_bytes() -> Vec<u8> {
     let header = MavHeader {
         system_id: 1,
         component_id: 1,
-        ..Default::default()
+        sequence: 0,
     };
     let msg = mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
     let mut buf = Vec::new();
     mavlink::write_v2_msg(&mut buf, header, &msg).unwrap();
-
-    socket.send(&buf).await.unwrap();
-
-    // Setup TCP listener (Endpoint 2)
-    let bus_tx2 = bus.sender();
-    let bus_rx2 = bus.subscribe();
-    let rt2 = routing_table.clone();
-    let dd2 = dedup.clone();
-    let f2 = filters.clone();
-    let t2 = token.clone();
-    let (route_tx2, _route_rx2) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
-
-    tokio::spawn(async move {
-        tcp::run(
-            2,
-            "127.0.0.1:15760".to_string(),
-            EndpointMode::Server,
-            bus_tx2,
-            bus_rx2,
-            rt2,
-            route_tx2,
-            dd2,
-            f2,
-            t2,
-            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
-        )
-        .await
-        .unwrap();
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let mut tcp_client = TcpStream::connect("127.0.0.1:15760").await.unwrap();
-
-    // Send UDP -> Router -> TCP
-    // Retry logic
-    let mut tcp_buf = [0u8; 1024];
-
-    // Send again to be sure TCP client is subscribed
-    socket.send(&buf).await.unwrap();
-
-    let result = tokio::time::timeout(Duration::from_secs(2), tcp_client.read(&mut tcp_buf)).await;
-    assert!(result.is_ok(), "Timeout waiting for UDP->TCP echo");
-    let n = result.unwrap().unwrap();
-    assert!(n > 0);
-    assert_eq!(tcp_buf[0], 0xFD);
+    buf
 }
 
+/// UDP → TCP loopback through a two-endpoint Router.
 #[tokio::test]
 #[serial]
-async fn test_tcp_bidirectional() {
-    let bus = create_bus(100);
-    let routing_table = Arc::new(RwLock::new(RoutingTable::new()));
-    let dedup = ConcurrentDedup::new(Duration::from_millis(0));
-    let filters = EndpointFilters::default();
-    let token = CancellationToken::new();
+async fn test_udp_to_tcp_echo() {
+    let toml = r#"
+[general]
+bus_capacity = 100
+dedup_period_ms = 0
 
-    // Start TCP Server 1 (ID 1)
-    let bus_tx = bus.sender();
-    let bus_rx = bus.subscribe();
-    let rt = routing_table.clone();
-    let dd = dedup.clone();
-    let f = filters.clone();
-    let t = token.clone();
-    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
+[[endpoint]]
+type = "udp"
+address = "127.0.0.1:14550"
+mode = "server"
 
-    tokio::spawn(async move {
-        tcp::run(
-            1,
-            "127.0.0.1:15761".to_string(),
-            EndpointMode::Server,
-            bus_tx,
-            bus_rx,
-            rt,
-            route_tx,
-            dd,
-            f,
-            t,
-            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
-        )
-        .await
-        .unwrap();
-    });
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:15760"
+mode = "server"
+"#;
 
-    // Start TCP Server 2 (ID 2)
-    let bus_tx2 = bus.sender();
-    let bus_rx2 = bus.subscribe();
-    let rt2 = routing_table.clone();
-    let dd2 = dedup.clone();
-    let f2 = filters.clone();
-    let t2 = token.clone();
-    let (route_tx2, _route_rx2) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
+    let router = Router::from_str(toml).await.expect("router should start");
 
-    tokio::spawn(async move {
-        tcp::run(
-            2,
-            "127.0.0.1:15762".to_string(),
-            EndpointMode::Server,
-            bus_tx2,
-            bus_rx2,
-            rt2,
-            route_tx2,
-            dd2,
-            f2,
-            t2,
-            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
-        )
-        .await
-        .unwrap();
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let mut client1 = TcpStream::connect("127.0.0.1:15761").await.unwrap();
-    let mut client3 = TcpStream::connect("127.0.0.1:15762").await.unwrap();
-
-    // Wait for connections to stabilize/subscribe
+    // Let both endpoints bind.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let header = MavHeader {
-        system_id: 1,
-        component_id: 1,
-        ..Default::default()
-    };
-    let msg = mavlink::common::MavMessage::HEARTBEAT(mavlink::common::HEARTBEAT_DATA::default());
-    let mut buf = Vec::new();
-    mavlink::write_v2_msg(&mut buf, header, &msg).unwrap();
+    let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    udp.connect("127.0.0.1:14550").await.unwrap();
+    let mut tcp = TcpStream::connect("127.0.0.1:15760").await.unwrap();
 
-    // Send/Recv Loop to avoid races
-    let mut rx_buf = [0u8; 1024];
+    // Give the TCP client time to land in the broadcast subscriber list.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let buf = heartbeat_bytes();
+    let mut rx = [0u8; 1024];
     let mut received = false;
 
     for _ in 0..5 {
-        client1.write_all(&buf).await.unwrap();
-
-        // Short timeout read
-        if let Ok(Ok(n)) =
-            tokio::time::timeout(Duration::from_millis(500), client3.read(&mut rx_buf)).await
+        udp.send(&buf).await.unwrap();
+        if let Ok(Ok(n)) = tokio::time::timeout(Duration::from_millis(500), tcp.read(&mut rx)).await
         {
             if n > 0 {
-                assert_eq!(rx_buf[0], 0xFD);
+                assert_eq!(rx[0], 0xFD, "MAVLink v2 magic expected");
                 received = true;
                 break;
             }
         }
     }
+    assert!(received, "UDP -> TCP echo did not arrive");
 
-    assert!(received, "Failed to receive TCP->TCP message");
+    router.stop().await;
+}
+
+/// TCP → TCP loopback: two TCP server endpoints bridged by the router's bus.
+#[tokio::test]
+#[serial]
+async fn test_tcp_to_tcp_bidirectional() {
+    let toml = r#"
+[general]
+bus_capacity = 100
+dedup_period_ms = 0
+
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:15761"
+mode = "server"
+
+[[endpoint]]
+type = "tcp"
+address = "127.0.0.1:15762"
+mode = "server"
+"#;
+
+    let router = Router::from_str(toml).await.expect("router should start");
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let mut client1 = TcpStream::connect("127.0.0.1:15761").await.unwrap();
+    let mut client2 = TcpStream::connect("127.0.0.1:15762").await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let buf = heartbeat_bytes();
+    let mut rx = [0u8; 1024];
+    let mut received = false;
+
+    for _ in 0..5 {
+        client1.write_all(&buf).await.unwrap();
+        if let Ok(Ok(n)) =
+            tokio::time::timeout(Duration::from_millis(500), client2.read(&mut rx)).await
+        {
+            if n > 0 {
+                assert_eq!(rx[0], 0xFD);
+                received = true;
+                break;
+            }
+        }
+    }
+    assert!(received, "TCP -> TCP bridging did not deliver");
+
+    router.stop().await;
 }

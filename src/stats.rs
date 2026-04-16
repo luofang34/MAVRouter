@@ -231,4 +231,17 @@ mod tests {
         let history = StatsHistory::new(60);
         assert!(history.aggregate(60).is_none());
     }
+
+    #[test]
+    fn test_stats_clock_adjustment() {
+        let mut history = StatsHistory::new(100);
+
+        history.push(dummy_stats(10, 1, 1, 100));
+        history.push(dummy_stats(20, 2, 2, 101));
+        // Clock jumps backward — aggregation must not panic.
+        history.push(dummy_stats(30, 3, 3, 99));
+
+        let agg = history.aggregate(50);
+        assert!(agg.is_some());
+    }
 }

@@ -122,3 +122,6 @@ pub async fn run(
     info!("TLog Logger finished flushing and closing.");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

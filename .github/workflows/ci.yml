@@ -81,12 +81,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Benches microbenchmark internal algorithms that aren't part of the
+      # public API, so they require the dev-only `_internal` feature which
+      # exposes `routing`, `router`, `filter`, and `mavlink_utils` as `pub`.
       - name: Run benchmarks
-        run: cargo bench --bench routing_benchmark
+        run: cargo bench --features _internal --bench routing_benchmark
       - name: Check for regression (Basic)
         run: |
-          # Verify benchmarks run successfully
-          cargo bench --bench routing_benchmark -- --test
+          # Verify benchmarks compile and run.
+          cargo bench --features _internal --bench routing_benchmark -- --test
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
