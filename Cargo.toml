@@ -45,6 +45,10 @@ serial_test = "3.0"
 criterion = "0.5"
 num_cpus = "1.16"
 tempfile = "3.10"
+# `no-env-filter` is required for integration tests — otherwise tracing-test
+# defaults to filtering by the test crate name and drops logs emitted from
+# inside `mavrouter::*`, which is exactly what `shutdown_test.rs` asserts on.
+tracing-test = { version = "0.2", features = ["no-env-filter"] }
 
 [[bench]]
 name = "routing_benchmark"
@@ -83,3 +87,9 @@ cast_sign_loss = "deny"
 # Ban `anyhow::Error` (and friends) in this crate — use `RouterError` with
 # explicit `.map_err()` instead. The list lives in `clippy.toml`.
 disallowed_types = "deny"
+# Ban `let _ = some_must_use_value;` — discarding errors silently has bitten us
+# (shutdown hangs, missed remove_file failures). Either handle the Result or
+# surface the discard explicitly via `.ok()` / `let _ = ...; // reason`.
+let_underscore_must_use = "deny"
+# Ban `let _ = some_future;` — dropping an unawaited future is almost always a bug.
+let_underscore_future = "deny"

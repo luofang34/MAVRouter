@@ -12,19 +12,41 @@ use crate::error::Result;
 use crate::filter::EndpointFilters;
 use crate::router::{create_bus, EndpointId, MessageBus};
 use crate::routing::RoutingTable;
+use futures::future::join_all;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+
+/// A spawned task tagged with a human-readable name.
+///
+/// The name is used by shutdown diagnostics to report which tasks
+/// failed to exit within the shutdown budget.
+pub struct NamedTask {
+    /// Human-readable name (e.g. `"UDP Endpoint 0 (0.0.0.0:14550)"`).
+    pub name: String,
+    /// Join handle for the spawned task.
+    pub handle: JoinHandle<()>,
+}
+
+impl NamedTask {
+    /// Wrap a spawned task with a descriptive name.
+    pub fn new(name: impl Into<String>, handle: JoinHandle<()>) -> Self {
+        Self {
+            name: name.into(),
+            handle,
+        }
+    }
+}
 
 /// Result of spawning all endpoints and background tasks.
 #[allow(dead_code)] // `bus` field used by library (high_level.rs) but not binary (main.rs)
 pub struct OrchestratedRouter {
-    /// All spawned task handles (background tasks + endpoint supervisors).
-    pub handles: Vec<JoinHandle<()>>,
+    /// All spawned tasks, each tagged with a name for shutdown diagnostics.
+    pub tasks: Vec<NamedTask>,
     /// The message bus for inter-endpoint communication.
     pub bus: MessageBus,
     /// Shared routing table.
@@ -58,7 +80,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
     }
 
     let routing_table = Arc::new(RwLock::new(rt));
-    let mut handles = Vec::new();
+    let mut tasks: Vec<NamedTask> = Vec::new();
     let mut endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)> = Vec::new();
 
     let dedup_period = config.general.dedup_period_ms.unwrap_or(0);
@@ -72,40 +94,46 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
     if !dedup_rotation_interval.is_zero() {
         let dedup_rotator = dedup.clone();
         let dedup_token = cancel_token.child_token();
-        handles.push(tokio::spawn(async move {
-            let mut interval = tokio::time::interval(dedup_rotation_interval);
-            loop {
-                tokio::select! {
-                    _ = dedup_token.cancelled() => {
-                        info!("Dedup Rotator shutting down.");
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        dedup_rotator.rotate_buckets();
+        tasks.push(NamedTask::new(
+            "Dedup Rotator",
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(dedup_rotation_interval);
+                loop {
+                    tokio::select! {
+                        _ = dedup_token.cancelled() => {
+                            info!("Dedup Rotator shutting down.");
+                            break;
+                        }
+                        _ = interval.tick() => {
+                            dedup_rotator.rotate_buckets();
+                        }
                     }
                 }
-            }
-        }));
+            }),
+        ));
     }
 
     // Spawn routing table pruner
     {
         let rt_prune = routing_table.clone();
         let prune_token = cancel_token.child_token();
-        handles.push(tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = prune_token.cancelled() => {
-                        info!("RoutingTable Pruner shutting down.");
-                        break;
-                    }
-                    _ = tokio::time::sleep(Duration::from_secs(prune_interval)) => {
-                        let mut rt = rt_prune.write();
-                        rt.prune(Duration::from_secs(prune_ttl));
+        tasks.push(NamedTask::new(
+            "RoutingTable Pruner",
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = prune_token.cancelled() => {
+                            info!("RoutingTable Pruner shutting down.");
+                            break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(prune_interval)) => {
+                            let mut rt = rt_prune.write();
+                            rt.prune(Duration::from_secs(prune_ttl));
+                        }
                     }
                 }
-            }
-        }));
+            }),
+        ));
     }
 
     // Spawn implicit TCP server if configured
@@ -122,10 +150,10 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
 
         endpoint_stats.push((EndpointId(id), name.clone(), stats.clone()));
 
-        handles.push(tokio::spawn(supervise(
+        let supervisor_name = name.clone();
+        tasks.push(NamedTask::new(
             name,
-            task_token.clone(),
-            move || {
+            tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
                 let bus_tx = bus_tx.clone();
                 let bus_rx = bus_tx.subscribe();
                 let rt = rt.clone();
@@ -141,8 +169,8 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                     )
                     .await
                 }
-            },
-        )));
+            })),
+        ));
     }
 
     // Spawn TLOG logger if configured
@@ -153,16 +181,16 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
             let dir = log_dir.clone();
             let task_token = cancel_token.child_token();
 
-            handles.push(tokio::spawn(supervise(
+            let supervisor_name = name.clone();
+            tasks.push(NamedTask::new(
                 name,
-                task_token.clone(),
-                move || {
+                tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
                     let bus_rx = bus_tx_tlog.subscribe();
                     let dir = dir.clone();
                     let token = task_token.clone();
                     async move { crate::endpoints::tlog::run(dir, bus_rx, token).await }
-                },
-            )));
+                })),
+            ));
         }
     }
 
@@ -191,10 +219,10 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 let cleanup_ttl = prune_ttl;
                 let bcast_timeout = *broadcast_timeout_secs;
 
-                handles.push(tokio::spawn(supervise(
+                let supervisor_name = name.clone();
+                tasks.push(NamedTask::new(
                     name,
-                    task_token.clone(),
-                    move || {
+                    tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
                         crate::endpoints::udp::run(
                             i,
                             address.clone(),
@@ -209,8 +237,8 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                             bcast_timeout,
                             stats.clone(),
                         )
-                    },
-                )));
+                    })),
+                ));
             }
             EndpointConfig::Tcp {
                 address,
@@ -225,10 +253,10 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 let mode = mode.clone();
                 let filters = filters.clone();
 
-                handles.push(tokio::spawn(supervise(
+                let supervisor_name = name.clone();
+                tasks.push(NamedTask::new(
                     name,
-                    task_token.clone(),
-                    move || {
+                    tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
                         crate::endpoints::tcp::run(
                             i,
                             address.clone(),
@@ -241,8 +269,8 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                             task_token.clone(),
                             stats.clone(),
                         )
-                    },
-                )));
+                    })),
+                ));
             }
             EndpointConfig::Serial {
                 device,
@@ -264,10 +292,10 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 };
                 let filters = filters.clone();
 
-                handles.push(tokio::spawn(supervise(
+                let supervisor_name = name.clone();
+                tasks.push(NamedTask::new(
                     name,
-                    task_token.clone(),
-                    move || {
+                    tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
                         let idx = baud_index.fetch_add(1, Ordering::Relaxed);
                         // idx % bauds.len() is always in bounds; bauds is non-empty (validated by config)
                         #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
@@ -285,17 +313,83 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                             task_token.clone(),
                             stats.clone(),
                         )
-                    },
-                )));
+                    })),
+                ));
             }
         }
     }
 
     OrchestratedRouter {
-        handles,
+        tasks,
         bus,
         routing_table,
         endpoint_stats,
+    }
+}
+
+// Used by the library (high_level.rs) and by integration tests; the binary
+// has its own inlined variant tailored to the main-loop select. Suppress the
+// bin-side "never used" warning without hiding real dead code.
+#[allow(dead_code)]
+/// Drive a set of [`NamedTask`]s to completion, bounded by `timeout_dur`.
+///
+/// On timeout, enumerates the task names that have not finished via
+/// [`AbortHandle::is_finished`], logs them at `error!` level, and aborts
+/// them so the process can exit instead of hanging. Returns `true` if all
+/// tasks exited on their own within the budget.
+///
+/// Use this after cancelling the shared [`CancellationToken`] so tasks
+/// have a reason to exit promptly.
+pub async fn shutdown_with_timeout(tasks: Vec<NamedTask>, timeout_dur: Duration) -> bool {
+    if tasks.is_empty() {
+        return true;
+    }
+
+    // Snapshot (name, AbortHandle) before we move each JoinHandle into the
+    // joined future — AbortHandles remain valid after the JoinHandle is
+    // consumed and let us ask "did this task actually finish?" on timeout.
+    let abort_view: Vec<(String, AbortHandle)> = tasks
+        .iter()
+        .map(|t| (t.name.clone(), t.handle.abort_handle()))
+        .collect();
+
+    let joins = tasks.into_iter().map(|t| {
+        let name = t.name;
+        let handle = t.handle;
+        async move {
+            let res = handle.await;
+            (name, res)
+        }
+    });
+
+    match tokio::time::timeout(timeout_dur, join_all(joins)).await {
+        Ok(results) => {
+            for (name, res) in results {
+                if let Err(e) = res {
+                    warn!("Task '{}' did not exit cleanly: {}", name, e);
+                }
+            }
+            true
+        }
+        Err(_) => {
+            let remaining: Vec<&str> = abort_view
+                .iter()
+                .filter(|(_, ah)| !ah.is_finished())
+                .map(|(n, _)| n.as_str())
+                .collect();
+            error!(
+                "Shutdown timed out after {:?}; {} task(s) still running: {:?}",
+                timeout_dur,
+                remaining.len(),
+                remaining
+            );
+            for (_, ah) in &abort_view {
+                if !ah.is_finished() {
+                    ah.abort();
+                }
+            }
+            false
+        }
     }
 }
 

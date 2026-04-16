@@ -70,7 +70,12 @@ pub mod endpoint_core;
 /// Custom error types for structured error handling.
 pub mod error;
 mod high_level;
-mod orchestration;
+/// Low-level task orchestration primitives: the [`orchestration::NamedTask`]
+/// handle pair, the shared [`orchestration::shutdown_with_timeout`] routine
+/// used by both the binary and the high-level `Router`, and the internal
+/// supervisor/spawning plumbing. Exposed so integration tests (and advanced
+/// embedders) can exercise the shutdown contract end-to-end.
+pub mod orchestration;
 /// Core message routing logic and types.
 pub mod router;
 /// Various MAVLink endpoint implementations (TCP, UDP, Serial, TLOG).

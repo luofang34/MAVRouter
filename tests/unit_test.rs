@@ -564,7 +564,7 @@ async fn test_message_bus_overflow() {
                 component_id: 0,
             },
         };
-        let _ = tx.send(msg);
+        tx.send(msg).ok();
     }
 
     // Should not panic
