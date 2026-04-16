@@ -479,4 +479,150 @@ block_src_comp_in = [99]
         assert!(filters.check_outgoing(&header, 0)); // OK
         assert!(!filters.check_outgoing(&header, 30)); // Blocked
     }
+
+    // ========================================================================
+    // Tests migrated from tests/unit_test.rs (empty allows / block overrides
+    // allow / allow-only / block-only / component / system / combined).
+    // ========================================================================
+
+    #[test]
+    fn test_filter_empty_allows_all() {
+        let filters = EndpointFilters::default();
+        let header = MavHeader {
+            system_id: 100,
+            component_id: 200,
+            sequence: 0,
+        };
+
+        assert!(filters.check_incoming(&header, 0));
+        assert!(filters.check_incoming(&header, 12345));
+        assert!(filters.check_outgoing(&header, 65535));
+    }
+
+    #[test]
+    fn test_filter_block_overrides_allow() {
+        let filters = EndpointFilters {
+            allow_msg_id_in: HashSet::from([0, 1]),
+            block_msg_id_in: HashSet::from([0]),
+            ..Default::default()
+        };
+
+        let header = MavHeader::default();
+
+        assert!(!filters.check_incoming(&header, 0)); // allow ∩ block → block wins
+        assert!(filters.check_incoming(&header, 1));
+        assert!(!filters.check_incoming(&header, 2)); // not in allow
+    }
+
+    #[test]
+    fn test_filter_allow_list_only() {
+        let filters = EndpointFilters {
+            allow_msg_id_out: HashSet::from([0, 1, 30]),
+            ..Default::default()
+        };
+
+        let header = MavHeader::default();
+
+        assert!(filters.check_outgoing(&header, 0));
+        assert!(filters.check_outgoing(&header, 1));
+        assert!(filters.check_outgoing(&header, 30));
+        assert!(!filters.check_outgoing(&header, 2));
+    }
+
+    #[test]
+    fn test_filter_block_list_only() {
+        let filters = EndpointFilters {
+            block_msg_id_out: HashSet::from([30, 31, 32]),
+            ..Default::default()
+        };
+
+        let header = MavHeader::default();
+
+        assert!(filters.check_outgoing(&header, 0));
+        assert!(filters.check_outgoing(&header, 1));
+        assert!(!filters.check_outgoing(&header, 30));
+        assert!(!filters.check_outgoing(&header, 31));
+        assert!(!filters.check_outgoing(&header, 32));
+    }
+
+    #[test]
+    fn test_filter_component() {
+        let filters = EndpointFilters {
+            allow_src_comp_in: HashSet::from([1, 190]), // autopilot, GCS
+            ..Default::default()
+        };
+
+        let header_autopilot = MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        };
+        let header_gcs = MavHeader {
+            system_id: 255,
+            component_id: 190,
+            sequence: 0,
+        };
+        let header_camera = MavHeader {
+            system_id: 1,
+            component_id: 100,
+            sequence: 0,
+        };
+
+        assert!(filters.check_incoming(&header_autopilot, 0));
+        assert!(filters.check_incoming(&header_gcs, 0));
+        assert!(!filters.check_incoming(&header_camera, 0));
+    }
+
+    #[test]
+    fn test_filter_system() {
+        let filters = EndpointFilters {
+            block_src_sys_in: HashSet::from([100, 200]),
+            ..Default::default()
+        };
+
+        let header_ok = MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        };
+        let header_blocked1 = MavHeader {
+            system_id: 100,
+            component_id: 1,
+            sequence: 0,
+        };
+        let header_blocked2 = MavHeader {
+            system_id: 200,
+            component_id: 1,
+            sequence: 0,
+        };
+
+        assert!(filters.check_incoming(&header_ok, 0));
+        assert!(!filters.check_incoming(&header_blocked1, 0));
+        assert!(!filters.check_incoming(&header_blocked2, 0));
+    }
+
+    #[test]
+    fn test_filter_combined() {
+        let filters = EndpointFilters {
+            allow_msg_id_in: HashSet::from([0, 30]), // HEARTBEAT and ATTITUDE
+            block_src_sys_in: HashSet::from([100]),
+            ..Default::default()
+        };
+
+        let header_sys1 = MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        };
+        let header_sys100 = MavHeader {
+            system_id: 100,
+            component_id: 1,
+            sequence: 0,
+        };
+
+        assert!(filters.check_incoming(&header_sys1, 0));
+        assert!(filters.check_incoming(&header_sys1, 30));
+        assert!(!filters.check_incoming(&header_sys1, 1));
+        assert!(!filters.check_incoming(&header_sys100, 0)); // blocked by system
+    }
 }

@@ -50,17 +50,27 @@ tempfile = "3.10"
 # inside `mavrouter::*`, which is exactly what `shutdown_test.rs` asserts on.
 tracing-test = { version = "0.2", features = ["no-env-filter"] }
 
+[features]
+# Exposes internal modules as `pub` for benchmarks and any other in-crate
+# tooling that needs direct access to implementation details. Never enable
+# this outside of `[[bench]]` targets — it bypasses the public-API
+# contract the rest of the crate is built around.
+_internal = []
+
 [[bench]]
 name = "routing_benchmark"
 harness = false
+required-features = ["_internal"]
 
 [[bench]]
 name = "filter_bench"
 harness = false
+required-features = ["_internal"]
 
 [[bench]]
 name = "clone_benchmark"
 harness = false
+required-features = ["_internal"]
 
 [lints.rust]
 unsafe_code = { level = "forbid", priority = -1 }

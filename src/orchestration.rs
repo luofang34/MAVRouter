@@ -476,6 +476,9 @@ pub async fn shutdown_with_timeout(tasks: Vec<NamedTask>, timeout_dur: Duration)
     }
 }
 
+#[cfg(test)]
+mod tests;
+
 /// Supervisor function that restarts tasks on failure with exponential backoff.
 ///
 /// Wraps a task factory, restarting the task whenever it completes (either

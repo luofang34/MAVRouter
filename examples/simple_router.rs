@@ -1,65 +1,39 @@
 //! Simple MAVRouter example
 //!
-//! This example creates a router with:
-//! - UDP server on port 14550 (for GCS)
-//! - TCP server on port 5760 (for companion computer)
+//! Starts a router from an inline TOML config with a single UDP server
+//! endpoint on port 14550, then blocks until Ctrl+C. This is the
+//! recommended way to embed `mavrouter` in a binary — nothing more than
+//! [`Router::from_str`] and [`Router::stop`] is required.
 //!
-//! Run with: cargo run --example simple_router
+//! Run with: `cargo run --example simple_router`
 
-use mavrouter::*;
-use std::time::Duration;
+use mavrouter::Router;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Initialize logging
+async fn main() -> Result<(), mavrouter::error::RouterError> {
     tracing_subscriber::fmt::init();
 
-    // Create message bus
-    let bus = router::create_bus(1000);
+    let router = Router::from_str(
+        r#"
+[general]
+bus_capacity = 1000
 
-    // Create routing table and deduplication
-    let routing_table = std::sync::Arc::new(parking_lot::RwLock::new(routing::RoutingTable::new()));
-    let dedup = dedup::ConcurrentDedup::new(Duration::from_millis(100));
+[[endpoint]]
+type = "udp"
+address = "0.0.0.0:14550"
+mode = "server"
+"#,
+    )
+    .await?;
 
-    let token = tokio_util::sync::CancellationToken::new();
+    tracing::info!("Router started — UDP GCS listening on 0.0.0.0:14550");
 
-    // Start UDP endpoint (GCS)
-    let bus_tx = bus.sender();
-    let bus_rx = bus.subscribe();
-    let rt = routing_table.clone();
-    let dd = dedup.clone();
-    let t = token.clone();
-    // This example does not spawn a routing updater task, so drop the
-    // receiver — ingress route submissions will silently fail via try_send,
-    // which is fine for a demo (the routing table just stays empty).
-    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<routing::RouteUpdate>(16);
-
-    tokio::spawn(async move {
-        endpoints::udp::run(
-            1,
-            "0.0.0.0:14550".to_string(),
-            config::EndpointMode::Server,
-            bus_tx,
-            bus_rx,
-            rt,
-            route_tx,
-            dd,
-            filter::EndpointFilters::default(),
-            t,
-            300,
-            5,
-            std::sync::Arc::new(mavrouter::endpoint_core::EndpointStats::new()),
-        )
-        .await
-    });
-
-    tracing::info!("Router started");
-    tracing::info!("UDP GCS: 0.0.0.0:14550");
-
-    // Wait for Ctrl+C
-    tokio::signal::ctrl_c().await?;
+    // Wait for Ctrl+C, then gracefully shut down.
+    if let Err(e) = tokio::signal::ctrl_c().await {
+        tracing::warn!("Failed to install Ctrl+C handler: {}", e);
+    }
     tracing::info!("Shutting down...");
-    token.cancel();
+    router.stop().await;
 
     Ok(())
 }
