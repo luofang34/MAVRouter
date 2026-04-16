@@ -57,7 +57,7 @@ use tracing::{error, info, warn};
 ///
 /// # Errors
 ///
-/// Returns an `anyhow::Error` if:
+/// Returns a [`crate::error::RouterError`] if:
 /// - Binding to the specified address in server mode fails.
 /// - An unrecoverable error occurs during connection establishment in client mode.
 #[allow(clippy::too_many_arguments)]

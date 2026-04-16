@@ -37,7 +37,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 ///
 /// # Errors
 ///
-/// Returns an `anyhow::Error` if:
+/// Returns a [`crate::error::RouterError`] if:
 /// - The `logs_dir` cannot be created.
 /// - The TLOG file cannot be created.
 /// - An error occurs during writing to the TLOG file.

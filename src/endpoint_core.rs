@@ -370,8 +370,8 @@ impl EndpointCore {
 ///
 /// # Errors
 ///
-/// Returns an `anyhow::Error` if a critical I/O error occurs on either the read
-/// or write stream.
+/// Returns a [`crate::error::RouterError`] if a critical I/O error occurs on either the
+/// read or write stream.
 pub async fn run_stream_loop<R, W>(
     mut reader: R,
     writer: W,
