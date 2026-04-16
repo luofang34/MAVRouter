@@ -117,8 +117,8 @@ mod tests {
         assert_eq!(received.source_id, EndpointId(1));
     }
 
-    /// Migrated from tests/unit_test.rs — sending with no subscribers must
-    /// not panic when the channel backlog overflows its bounded capacity.
+    /// Sending with no subscribers must not panic when the channel backlog
+    /// overflows its bounded capacity.
     #[tokio::test]
     async fn test_message_bus_overflow() {
         let bus = create_bus(10);

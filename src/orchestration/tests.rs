@@ -1,11 +1,7 @@
-//! Unit tests for the orchestration-layer primitives.
-//!
-//! Two previously-external integration test files have been collapsed here
-//! because what they exercise is fundamentally a *private* contract: the
-//! shutdown helper's behaviour when tasks are cooperative vs. stuck, and
-//! the routing updater's ability to keep async tasks unstarved under
-//! contention. Both rely on internals (`NamedTask`, `spawn_routing_updater`,
-//! `shutdown_with_timeout`) that the public `Router` API deliberately hides.
+//! Unit tests for the orchestration-layer primitives: the shutdown
+//! helper's behaviour when tasks are cooperative vs. stuck, and the
+//! routing updater's ability to keep async tasks unstarved under
+//! contention.
 
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
@@ -20,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing_test::traced_test;
 
 // ============================================================================
-// shutdown_with_timeout (migrated from tests/shutdown_test.rs)
+// shutdown_with_timeout
 // ============================================================================
 
 fn spawn_stuck_task(name: &str) -> NamedTask {
@@ -113,7 +109,6 @@ async fn shutdown_with_timeout_is_noop_for_empty_task_list() {
 
 // ============================================================================
 // spawn_routing_updater contention / fairness
-// (migrated from tests/routing_contention_test.rs)
 // ============================================================================
 
 const WRITER_COUNT: usize = 20;

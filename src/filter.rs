@@ -480,11 +480,6 @@ block_src_comp_in = [99]
         assert!(!filters.check_outgoing(&header, 30)); // Blocked
     }
 
-    // ========================================================================
-    // Tests migrated from tests/unit_test.rs (empty allows / block overrides
-    // allow / allow-only / block-only / component / system / combined).
-    // ========================================================================
-
     #[test]
     fn test_filter_empty_allows_all() {
         let filters = EndpointFilters::default();

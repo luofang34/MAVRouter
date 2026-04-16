@@ -232,12 +232,6 @@ mod tests {
         assert!(history.aggregate(60).is_none());
     }
 
-    // ========================================================================
-    // Migrated from tests/unit_test.rs — retention/aggregation/empty cases
-    // were already covered by the tests above; the clock-adjustment case
-    // is genuinely new.
-    // ========================================================================
-
     #[test]
     fn test_stats_clock_adjustment() {
         let mut history = StatsHistory::new(100);

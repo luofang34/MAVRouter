@@ -1,7 +1,4 @@
-//! Unit tests for [`RoutingTable`].
-//!
-//! Split out of `src/routing.rs` into a sibling module to keep the main
-//! source file under the CLAUDE.md 500-line budget. Covers:
+//! Unit tests for [`RoutingTable`]. Covers:
 //! - basic routing semantics, broadcast, and component fallback
 //! - capacity limits and TTL pruning
 //! - concurrent access (sync + async)

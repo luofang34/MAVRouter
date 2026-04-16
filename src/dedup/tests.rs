@@ -1,7 +1,4 @@
-//! Unit tests for [`Dedup`] and [`ConcurrentDedup`].
-//!
-//! Split out of `src/dedup.rs` into a sibling module to keep the main
-//! source file under the CLAUDE.md 500-line budget. Covers:
+//! Unit tests for [`Dedup`] and [`ConcurrentDedup`]. Covers:
 //! - single-threaded time-wheel semantics
 //! - `Duration::ZERO` disable path
 //! - bucket-rotation TTL behaviour

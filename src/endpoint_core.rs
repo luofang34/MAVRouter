@@ -153,7 +153,7 @@ impl ExponentialBackoff {
 /// — see [`crate::routing::RouteUpdate`] and
 /// [`crate::orchestration::spawn_routing_updater`]. This keeps the hot path
 /// strictly non-blocking: it never calls `RwLock::write()` itself, which
-/// previously could stall a tokio worker thread under contention.
+/// would stall a tokio worker thread under contention.
 #[derive(Clone)]
 pub struct EndpointCore {
     /// Unique identifier for this endpoint.
@@ -259,9 +259,8 @@ impl EndpointCore {
                 // Submit to the dedicated routing updater task. `try_send` never
                 // blocks — if the queue is saturated we drop this observation and
                 // will retry the next time `needs_update_for_endpoint` fires
-                // (≤ 1s later by design). Dropping here is strictly preferable to
-                // taking a blocking write lock on a tokio worker thread, which is
-                // what the old fallback did.
+                // (≤ 1s later by design). Dropping is strictly preferable to
+                // taking a blocking write lock on a tokio worker thread.
                 let update = RouteUpdate {
                     endpoint_id: self.id,
                     sys_id: frame.header.system_id,

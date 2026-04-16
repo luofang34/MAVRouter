@@ -1,8 +1,5 @@
 //! Unit tests for [`EndpointCore`], [`ExponentialBackoff`], [`EndpointStats`]
-//! and [`run_stream_loop`].
-//!
-//! Split out of `src/endpoint_core.rs` into a sibling module to keep the main
-//! source file under the CLAUDE.md 500-line budget. Covers:
+//! and [`run_stream_loop`]. Covers:
 //! - `ExponentialBackoff` (initial / doubling / cap / reset / custom multiplier)
 //! - `EndpointStats` (defaults, increment+snapshot, Display, concurrent access)
 //! - `timestamp_us_fast` (monotonic + wall-clock proximity)
@@ -176,7 +173,6 @@ fn test_timestamp_us_fast_monotonic_walltime() {
 
 // ============================================================================
 // handle_incoming_frame / check_outgoing
-// (migrated from tests/unit_test.rs)
 // ============================================================================
 
 /// Build a valid MAVLink v2 HEARTBEAT frame and return it as a `MavlinkFrame`,
@@ -417,7 +413,7 @@ fn test_check_outgoing_pass_through() {
 }
 
 // ============================================================================
-// run_stream_loop loopback (migrated from tests/unit_integration.rs)
+// run_stream_loop loopback
 // ============================================================================
 
 #[tokio::test]

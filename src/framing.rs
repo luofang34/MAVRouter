@@ -379,11 +379,6 @@ mod tests {
         assert!(parser.buffer.is_empty());
     }
 
-    // ========================================================================
-    // Overflow / recovery / STX-in-header / V1+V2 (migrated from
-    // tests/unit_test.rs so the parser unit tests live next to the parser).
-    // ========================================================================
-
     #[test]
     fn test_stream_parser_buffer_overflow() {
         let mut parser = StreamParser::new();
