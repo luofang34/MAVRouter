@@ -35,6 +35,7 @@ async fn test_udp_echo() {
     let dd = dedup.clone();
     let f = filters.clone();
     let t = token.clone();
+    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
 
     tokio::spawn(async move {
         udp::run(
@@ -44,6 +45,7 @@ async fn test_udp_echo() {
             bus_tx,
             bus_rx,
             rt,
+            route_tx,
             dd,
             f,
             t,
@@ -78,6 +80,7 @@ async fn test_udp_echo() {
     let dd2 = dedup.clone();
     let f2 = filters.clone();
     let t2 = token.clone();
+    let (route_tx2, _route_rx2) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
 
     tokio::spawn(async move {
         tcp::run(
@@ -87,6 +90,7 @@ async fn test_udp_echo() {
             bus_tx2,
             bus_rx2,
             rt2,
+            route_tx2,
             dd2,
             f2,
             t2,
@@ -130,6 +134,7 @@ async fn test_tcp_bidirectional() {
     let dd = dedup.clone();
     let f = filters.clone();
     let t = token.clone();
+    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
 
     tokio::spawn(async move {
         tcp::run(
@@ -139,6 +144,7 @@ async fn test_tcp_bidirectional() {
             bus_tx,
             bus_rx,
             rt,
+            route_tx,
             dd,
             f,
             t,
@@ -155,6 +161,7 @@ async fn test_tcp_bidirectional() {
     let dd2 = dedup.clone();
     let f2 = filters.clone();
     let t2 = token.clone();
+    let (route_tx2, _route_rx2) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
 
     tokio::spawn(async move {
         tcp::run(
@@ -164,6 +171,7 @@ async fn test_tcp_bidirectional() {
             bus_tx2,
             bus_rx2,
             rt2,
+            route_tx2,
             dd2,
             f2,
             t2,
