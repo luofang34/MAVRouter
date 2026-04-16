@@ -68,6 +68,7 @@ pub async fn run(
     bus_tx: broadcast::Sender<RoutedMessage>,
     bus_rx: broadcast::Receiver<RoutedMessage>,
     routing_table: Arc<RwLock<RoutingTable>>,
+    route_update_tx: tokio::sync::mpsc::Sender<crate::routing::RouteUpdate>,
     dedup: ConcurrentDedup,
     filters: EndpointFilters,
     token: CancellationToken,
@@ -81,6 +82,7 @@ pub async fn run(
         id: EndpointId(id),
         bus_tx: bus_tx.clone(),
         routing_table: routing_table.clone(),
+        route_update_tx: route_update_tx.clone(),
         dedup: dedup.clone(),
         filters: filters.clone(),
         update_routing: true, // TCP client mode updates routing table
@@ -121,6 +123,7 @@ pub async fn run(
                                     id: EndpointId(client_id),
                                     bus_tx: core.bus_tx.clone(),
                                     routing_table: core.routing_table.clone(),
+                                    route_update_tx: core.route_update_tx.clone(),
                                     dedup: core.dedup.clone(),
                                     filters: core.filters.clone(),
                                     update_routing: true, // Required for targeted message routing

@@ -225,6 +225,7 @@ async fn test_tcp_server_connection_limit() {
     let dd = dedup.clone();
     let f = filters.clone();
     let t = token.clone();
+    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
 
     // Start TCP server on a known port
     tokio::spawn(async move {
@@ -235,6 +236,7 @@ async fn test_tcp_server_connection_limit() {
             bus_tx,
             bus_rx,
             rt,
+            route_tx,
             dd,
             f,
             t,

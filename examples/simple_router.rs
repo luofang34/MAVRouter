@@ -29,6 +29,10 @@ async fn main() -> anyhow::Result<()> {
     let rt = routing_table.clone();
     let dd = dedup.clone();
     let t = token.clone();
+    // This example does not spawn a routing updater task, so drop the
+    // receiver — ingress route submissions will silently fail via try_send,
+    // which is fine for a demo (the routing table just stays empty).
+    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<routing::RouteUpdate>(16);
 
     tokio::spawn(async move {
         endpoints::udp::run(
@@ -38,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
             bus_tx,
             bus_rx,
             rt,
+            route_tx,
             dd,
             filter::EndpointFilters::default(),
             t,

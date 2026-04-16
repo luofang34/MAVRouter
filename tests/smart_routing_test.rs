@@ -55,7 +55,20 @@ async fn test_targeted_message_routing() {
     let filters = EndpointFilters::default();
     let token = CancellationToken::new();
 
-    // Start 3 TCP endpoints
+    // Spawn the routing updater so submitted RouteUpdates actually land in
+    // the shared routing table — this test depends on learned routes to
+    // deliver targeted messages.
+    let (route_update_tx, route_update_rx) =
+        tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(1024);
+    let _updater = mavrouter::orchestration::spawn_routing_updater(
+        routing_table.clone(),
+        route_update_rx,
+        Duration::from_secs(300),
+        Duration::from_secs(60),
+        token.child_token(),
+    );
+
+    // Start 3 TCP endpoints, all feeding the same updater.
     for i in 1..=3 {
         let bus_tx = bus.sender();
         let bus_rx = bus.subscribe();
@@ -64,6 +77,7 @@ async fn test_targeted_message_routing() {
         let f = filters.clone();
         let t = token.clone();
         let port = 16000 + i;
+        let route_tx = route_update_tx.clone();
 
         tokio::spawn(async move {
             tcp::run(
@@ -73,6 +87,7 @@ async fn test_targeted_message_routing() {
                 bus_tx,
                 bus_rx,
                 rt,
+                route_tx,
                 dd,
                 f,
                 t,
@@ -198,6 +213,7 @@ async fn test_unknown_target_dropped() {
     // Only 1 endpoint
     let bus_tx = bus.sender();
     let bus_rx = bus.subscribe();
+    let (route_tx, _route_rx) = tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
     tokio::spawn({
         let rt = routing_table.clone();
         let dd = dedup.clone();
@@ -211,6 +227,7 @@ async fn test_unknown_target_dropped() {
                 bus_tx,
                 bus_rx,
                 rt,
+                route_tx,
                 dd,
                 f,
                 t,

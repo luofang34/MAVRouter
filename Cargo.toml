@@ -93,3 +93,6 @@ disallowed_types = "deny"
 let_underscore_must_use = "deny"
 # Ban `let _ = some_future;` — dropping an unawaited future is almost always a bug.
 let_underscore_future = "deny"
+# Catch non-Send / parking_lot lock guards being held across .await points.
+# A single violation can wedge a tokio worker, so treat it as an error, not a warning.
+await_holding_lock = "deny"

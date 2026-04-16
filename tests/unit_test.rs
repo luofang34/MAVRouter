@@ -611,10 +611,17 @@ fn make_endpoint_core(
     use mavrouter::dedup::ConcurrentDedup;
     use mavrouter::router::EndpointId;
 
+    // Unit tests that exercise routing-table mutation do so through the
+    // table directly; the mpsc-backed updater isn't under test here, so a
+    // small capacity channel with the receiver dropped is sufficient.
+    let (route_update_tx, _route_update_rx) =
+        tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
+
     mavrouter::endpoint_core::EndpointCore {
         id: EndpointId(id),
         bus_tx,
         routing_table,
+        route_update_tx,
         dedup: ConcurrentDedup::new(dedup_period),
         filters,
         update_routing: true,

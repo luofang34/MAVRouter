@@ -25,10 +25,17 @@ async fn test_stream_loopback() {
     let bus_tx = bus.sender();
     let bus_rx = bus.subscribe();
 
+    // Tests don't actually care about applied route updates — use a small
+    // bounded channel and drop the receiver; `try_send` on the producer side
+    // will then silently fail without affecting the loopback assertion.
+    let (route_update_tx, _route_update_rx) =
+        tokio::sync::mpsc::channel::<mavrouter::routing::RouteUpdate>(16);
+
     let core = EndpointCore {
         id: EndpointId(1),
         bus_tx,
         routing_table,
+        route_update_tx,
         dedup,
         filters,
         update_routing: true,

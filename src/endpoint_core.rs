@@ -11,7 +11,7 @@ use crate::filter::EndpointFilters;
 use crate::framing::{MavlinkFrame, StreamParser};
 use crate::mavlink_utils::extract_target;
 use crate::router::{EndpointId, RoutedMessage};
-use crate::routing::RoutingTable;
+use crate::routing::{RouteUpdate, RoutingTable};
 use mavlink::Message;
 use parking_lot::RwLock;
 use std::fmt;
@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
@@ -143,6 +144,16 @@ impl ExponentialBackoff {
 /// Each concrete endpoint type (TCP, UDP, Serial) will create an instance
 /// of `EndpointCore` to handle common tasks like message filtering,
 /// deduplication, and routing table updates.
+///
+/// # Routing-table mutation model
+///
+/// The hot ingress path only *reads* the routing table (to decide whether an
+/// update is needed). New route observations are submitted to a dedicated
+/// "Routing Updater" background task through [`EndpointCore::route_update_tx`]
+/// — see [`crate::routing::RouteUpdate`] and
+/// [`crate::orchestration::spawn_routing_updater`]. This keeps the hot path
+/// strictly non-blocking: it never calls `RwLock::write()` itself, which
+/// previously could stall a tokio worker thread under contention.
 #[derive(Clone)]
 pub struct EndpointCore {
     /// Unique identifier for this endpoint.
@@ -150,7 +161,15 @@ pub struct EndpointCore {
     /// Sender half of the global message bus for publishing incoming messages.
     pub bus_tx: broadcast::Sender<RoutedMessage>,
     /// Shared routing table for learning and querying MAVLink network topology.
+    ///
+    /// The hot path only takes *read* locks here. All writes go through
+    /// [`EndpointCore::route_update_tx`] so the async ingress loop never
+    /// blocks a tokio worker on a contended write lock.
     pub routing_table: Arc<RwLock<RoutingTable>>,
+    /// Channel to the routing updater task. The hot path submits
+    /// [`RouteUpdate`]s here with `try_send`; the updater task batches them
+    /// and applies them under the write lock on its own.
+    pub route_update_tx: mpsc::Sender<RouteUpdate>,
     /// Shared concurrent deduplication instance (sharded for multicore scalability).
     pub dedup: ConcurrentDedup,
     /// Filters applied to messages for this specific endpoint.
@@ -237,21 +256,39 @@ impl EndpointCore {
             };
 
             if needs_update {
-                if let Some(mut rt) = self.routing_table.try_write() {
-                    rt.update(
-                        self.id,
-                        frame.header.system_id,
-                        frame.header.component_id,
-                        now,
-                    );
-                } else {
-                    let mut rt = self.routing_table.write();
-                    rt.update(
-                        self.id,
-                        frame.header.system_id,
-                        frame.header.component_id,
-                        now,
-                    );
+                // Submit to the dedicated routing updater task. `try_send` never
+                // blocks — if the queue is saturated we drop this observation and
+                // will retry the next time `needs_update_for_endpoint` fires
+                // (≤ 1s later by design). Dropping here is strictly preferable to
+                // taking a blocking write lock on a tokio worker thread, which is
+                // what the old fallback did.
+                let update = RouteUpdate {
+                    endpoint_id: self.id,
+                    sys_id: frame.header.system_id,
+                    comp_id: frame.header.component_id,
+                    now,
+                };
+                if let Err(e) = self.route_update_tx.try_send(update) {
+                    use mpsc::error::TrySendError;
+                    match e {
+                        TrySendError::Full(_) => {
+                            trace!(
+                                endpoint_id = %self.id,
+                                sys_id = frame.header.system_id,
+                                comp_id = frame.header.component_id,
+                                "Routing update queue full; dropping observation (will retry on next ingress)",
+                            );
+                        }
+                        TrySendError::Closed(_) => {
+                            // Updater task has exited — either during shutdown
+                            // or as a bug. Log once so we notice, but keep
+                            // processing frames (routing becomes stale, not wrong).
+                            trace!(
+                                endpoint_id = %self.id,
+                                "Routing update channel closed; observation dropped",
+                            );
+                        }
+                    }
                 }
             }
         }
