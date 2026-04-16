@@ -1,8 +1,8 @@
 //! Custom error types for mavrouter-rs.
 //!
 //! This module defines structured error types that provide better error handling
-//! and debugging compared to using `anyhow::Error` everywhere. Each error variant
-//! includes contextual information about what went wrong and where.
+//! and debugging compared to untyped errors. Each error variant includes
+//! contextual information about what went wrong and where.
 
 use std::io;
 use thiserror::Error;
@@ -46,10 +46,6 @@ pub enum RouterError {
         #[source]
         source: io::Error,
     },
-
-    /// Other unexpected errors
-    #[error("Internal error: {0}")]
-    Internal(String),
 }
 
 /// Type alias for Results that use RouterError
@@ -86,16 +82,10 @@ impl RouterError {
     }
 }
 
-/// Convert from anyhow::Error (for gradual migration)
-impl From<anyhow::Error> for RouterError {
-    fn from(err: anyhow::Error) -> Self {
-        Self::Internal(err.to_string())
-    }
-}
-
-// Blanket From<io::Error> and From<tokio_serial::Error> impls intentionally removed.
-// Use RouterError::network(), RouterError::serial(), or RouterError::filesystem()
-// with .map_err() at each call site to provide proper context.
+// Blanket From<io::Error>, From<tokio_serial::Error>, and From<anyhow::Error> impls
+// intentionally omitted. Use RouterError::config(), RouterError::network(),
+// RouterError::serial(), or RouterError::filesystem() with .map_err() at each
+// call site to provide proper context instead of silently wrapping opaque errors.
 
 #[cfg(test)]
 mod tests {
@@ -131,13 +121,5 @@ mod tests {
         let router_err = RouterError::network("test-endpoint", io_err);
         assert!(matches!(router_err, RouterError::Network { .. }));
         assert!(router_err.to_string().contains("test-endpoint"));
-    }
-
-    #[test]
-    fn test_anyhow_error_conversion() {
-        let anyhow_err = anyhow::anyhow!("something went wrong");
-        let router_err: RouterError = anyhow_err.into();
-        assert!(matches!(router_err, RouterError::Internal(_)));
-        assert!(router_err.to_string().contains("something went wrong"));
     }
 }

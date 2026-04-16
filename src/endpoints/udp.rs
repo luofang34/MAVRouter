@@ -94,7 +94,7 @@ pub fn is_broadcast_addr(addr: &SocketAddr) -> bool {
 ///
 /// # Errors
 ///
-/// Returns an `anyhow::Error` if:
+/// Returns a [`crate::error::RouterError`] if:
 /// - Binding to the specified address fails.
 /// - The remote address for client mode cannot be resolved.
 #[allow(clippy::too_many_arguments)]

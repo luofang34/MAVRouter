@@ -1,0 +1,11 @@
+# Types banned across the crate. Paired with
+# `disallowed_types = "deny"` in `[lints.clippy]` in `Cargo.toml`.
+#
+# `anyhow::Error` is intentionally forbidden: it erases the structured
+# variants of `RouterError` and lets opaque errors propagate through `?`.
+# If you actually need it at a boundary (e.g. a `main` that wants
+# `anyhow::Result<()>` for pretty panics), put `#[allow(clippy::disallowed_types)]`
+# right at that call site.
+disallowed-types = [
+    { path = "anyhow::Error", reason = "use RouterError with explicit map_err instead" },
+]

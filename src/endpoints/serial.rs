@@ -48,8 +48,8 @@ use tracing::warn;
 ///
 /// # Errors
 ///
-/// Returns an `anyhow::Error` if a critical error occurs that prevents further operation,
-/// such as a permanent serial port configuration issue.
+/// Returns a [`crate::error::RouterError`] if a critical error occurs that prevents further
+/// operation, such as a permanent serial port configuration issue.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     id: usize,
@@ -99,7 +99,7 @@ pub async fn run(
 ///
 /// # Errors
 ///
-/// Returns an `anyhow::Error` if the serial port cannot be opened or configured.
+/// Returns a [`crate::error::RouterError`] if the serial port cannot be opened or configured.
 #[allow(unused_mut)]
 async fn open_and_run(
     device: &str,
