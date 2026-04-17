@@ -17,6 +17,7 @@
 
 use super::*;
 use crate::filter::EndpointFilters;
+use crate::framing::{MavlinkFrame, StreamParser};
 use crate::router::{create_bus, EndpointId, RoutedMessage};
 use crate::routing::{RouteUpdate, RoutingTable};
 use ahash::AHashSet as HashSet;

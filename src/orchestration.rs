@@ -7,20 +7,18 @@
 
 use crate::config::{Config, EndpointConfig};
 use crate::dedup::ConcurrentDedup;
-use crate::endpoint_core::{EndpointStats, ExponentialBackoff};
-use crate::error::Result;
+use crate::endpoint_core::EndpointStats;
 use crate::filter::EndpointFilters;
 use crate::router::{create_bus, EndpointId, MessageBus};
 use crate::routing::{RouteUpdate, RoutingTable};
-use futures::future::join_all;
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::task::{AbortHandle, JoinHandle};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
 /// Bounded capacity of the routing-update channel that feeds the routing
 /// updater task from every endpoint's ingress path.
@@ -345,189 +343,17 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
     }
 }
 
-/// Spawn the single routing-table updater task.
-///
-/// This is the *only* code path in the crate that acquires
-/// `routing_table.write()`. It drains the route-update mpsc channel in
-/// batches (up to `ROUTE_UPDATE_BATCH_SIZE` per write-lock acquisition)
-/// and also drives periodic prune cycles from the same task — meaning
-/// readers only ever contend with this one updater, and there is no
-/// scenario where an async hot path holds a blocking write lock.
-///
-/// The task exits on cancellation or when all update senders have been
-/// dropped (e.g. all endpoints have finished during shutdown).
-pub fn spawn_routing_updater(
-    routing_table: Arc<RwLock<RoutingTable>>,
-    mut update_rx: mpsc::Receiver<RouteUpdate>,
-    prune_ttl: Duration,
-    prune_interval: Duration,
-    cancel: CancellationToken,
-) -> NamedTask {
-    let handle = tokio::spawn(async move {
-        let mut prune_timer = tokio::time::interval(prune_interval);
-        // The first tick fires immediately — skip it so we don't prune an
-        // empty table the instant the router starts.
-        prune_timer.tick().await;
-
-        let mut batch: Vec<RouteUpdate> = Vec::with_capacity(ROUTE_UPDATE_BATCH_SIZE);
-
-        loop {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    info!("Routing Updater shutting down.");
-                    break;
-                }
-                maybe_update = update_rx.recv() => {
-                    let Some(first) = maybe_update else {
-                        debug!("Routing Updater: all update senders dropped, exiting.");
-                        break;
-                    };
-                    batch.clear();
-                    batch.push(first);
-                    // Opportunistically drain more queued updates so we amortise
-                    // the write-lock acquisition across many observations.
-                    while batch.len() < ROUTE_UPDATE_BATCH_SIZE {
-                        match update_rx.try_recv() {
-                            Ok(u) => batch.push(u),
-                            Err(_) => break,
-                        }
-                    }
-                    let mut guard = routing_table.write();
-                    for u in batch.iter() {
-                        guard.update(u.endpoint_id, u.sys_id, u.comp_id, u.now);
-                    }
-                    drop(guard);
-                }
-                _ = prune_timer.tick() => {
-                    let mut guard = routing_table.write();
-                    guard.prune(prune_ttl);
-                    drop(guard);
-                }
-            }
-        }
-    });
-    NamedTask::new("Routing Updater", handle)
-}
-
-// Used by the library (high_level.rs) and by integration tests; the binary
-// has its own inlined variant tailored to the main-loop select. Suppress the
-// bin-side "never used" warning without hiding real dead code.
-#[allow(dead_code)]
-/// Drive a set of [`NamedTask`]s to completion, bounded by `timeout_dur`.
-///
-/// On timeout, enumerates the task names that have not finished via
-/// [`AbortHandle::is_finished`], logs them at `error!` level, and aborts
-/// them so the process can exit instead of hanging. Returns `true` if all
-/// tasks exited on their own within the budget.
-///
-/// Use this after cancelling the shared [`CancellationToken`] so tasks
-/// have a reason to exit promptly.
-pub async fn shutdown_with_timeout(tasks: Vec<NamedTask>, timeout_dur: Duration) -> bool {
-    if tasks.is_empty() {
-        return true;
-    }
-
-    // Snapshot (name, AbortHandle) before we move each JoinHandle into the
-    // joined future — AbortHandles remain valid after the JoinHandle is
-    // consumed and let us ask "did this task actually finish?" on timeout.
-    let abort_view: Vec<(String, AbortHandle)> = tasks
-        .iter()
-        .map(|t| (t.name.clone(), t.handle.abort_handle()))
-        .collect();
-
-    let joins = tasks.into_iter().map(|t| {
-        let name = t.name;
-        let handle = t.handle;
-        async move {
-            let res = handle.await;
-            (name, res)
-        }
-    });
-
-    match tokio::time::timeout(timeout_dur, join_all(joins)).await {
-        Ok(results) => {
-            for (name, res) in results {
-                if let Err(e) = res {
-                    warn!("Task '{}' did not exit cleanly: {}", name, e);
-                }
-            }
-            true
-        }
-        Err(_) => {
-            let remaining: Vec<&str> = abort_view
-                .iter()
-                .filter(|(_, ah)| !ah.is_finished())
-                .map(|(n, _)| n.as_str())
-                .collect();
-            error!(
-                "Shutdown timed out after {:?}; {} task(s) still running: {:?}",
-                timeout_dur,
-                remaining.len(),
-                remaining
-            );
-            for (_, ah) in &abort_view {
-                if !ah.is_finished() {
-                    ah.abort();
-                }
-            }
-            false
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
-/// Supervisor function that restarts tasks on failure with exponential backoff.
-///
-/// Wraps a task factory, restarting the task whenever it completes (either
-/// successfully or with an error). Uses exponential backoff to avoid rapid
-/// restart loops, resetting after 60 seconds of stable operation.
-pub async fn supervise<F, Fut>(name: String, cancel_token: CancellationToken, task_factory: F)
-where
-    F: Fn() -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = Result<()>> + Send + 'static,
-{
-    let mut backoff = ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(30), 2.0);
+mod shutdown;
+mod supervisor;
+mod updater;
 
-    loop {
-        tokio::select! {
-            _ = cancel_token.cancelled() => {
-                info!("Supervisor for {} shutting down.", name);
-                break;
-            }
-            _ = async {
-                let start_time = std::time::Instant::now();
-                let result = task_factory().await;
-
-                // If task ran for more than 60 seconds, reset backoff
-                if start_time.elapsed() > Duration::from_secs(60) {
-                    backoff.reset();
-                }
-
-                match result {
-                    Ok(_) => {
-                        warn!("Supervisor: Task {} finished cleanly (unexpected). Restarting...", name);
-                    }
-                    Err(e) => {
-                        error!("Supervisor: Task {} failed: {:#}. Restarting...", name, e);
-                    }
-                }
-            } => {}
-        }
-
-        let wait = backoff.next_backoff();
-        info!(
-            "Supervisor: Waiting {:.1?} before restarting {}",
-            wait, name
-        );
-        tokio::select! {
-            _ = tokio::time::sleep(wait) => {},
-            _ = cancel_token.cancelled() => {
-                info!("Supervisor for {} shutting down during backoff.", name);
-                break;
-            }
-        }
-    }
-}
+// `shutdown_with_timeout` is used by the library's `high_level::Router`
+// and by integration tests; the binary shuts down inline, so the bin target
+// reports the re-export as unused. Allow it — this is the intended contract.
+#[allow(unused_imports)]
+pub use shutdown::shutdown_with_timeout;
+pub use supervisor::supervise;
+pub use updater::spawn_routing_updater;
