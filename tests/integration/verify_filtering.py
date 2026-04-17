@@ -39,6 +39,26 @@ def wait_for_tcp(host, port, timeout=10):
     return False
 
 
+def claim_tcp_port():
+    """Reserve an ephemeral TCP port (bind 127.0.0.1:0, read port, release).
+    Same idiom as the Rust `claim_tcp_ports` helper — avoids hard-coding
+    ports per CLAUDE.md."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def claim_udp_port():
+    """Reserve an ephemeral UDP port. See [claim_tcp_port]."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
 def main():
     print("=" * 50)
     print("Message Filtering & Deduplication Test")
@@ -46,6 +66,10 @@ def main():
 
     config_path = tempfile.mktemp(suffix='.toml')
     proc = None
+
+    # Claim ephemeral ports before writing the config.
+    tcp_port = claim_tcp_port()
+    udp_port = claim_udp_port()
 
     try:
         subprocess.run(['pkill', '-9', 'mavrouter'], capture_output=True)
@@ -56,15 +80,15 @@ def main():
         # - UDP endpoint with block_msg_id_out = [0] (block HEARTBEAT outgoing)
         # - dedup_period_ms = 500
         print("\n[1/6] Creating config with msg_id filter and dedup...")
-        config = """
+        config = f"""
 [general]
 bus_capacity = 5000
-tcp_port = 5766
+tcp_port = {tcp_port}
 dedup_period_ms = 500
 
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:14556"
+address = "127.0.0.1:{udp_port}"
 mode = "server"
 block_msg_id_out = [0]
 """
@@ -78,7 +102,7 @@ block_msg_id_out = [0]
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT
         )
-        if not wait_for_tcp('127.0.0.1', 5766, timeout=10):
+        if not wait_for_tcp('127.0.0.1', tcp_port, timeout=10):
             print("ERROR: Router failed to start")
             if proc:
                 out = proc.stdout.read().decode('utf-8', errors='replace') if proc.stdout else ''
@@ -89,7 +113,7 @@ block_msg_id_out = [0]
 
         # Connect TCP client as autopilot (sysid=1)
         print("\n[3/6] Connecting TCP autopilot (sysid=1)...")
-        autopilot = mavutil.mavlink_connection('tcp:127.0.0.1:5766', source_system=1)
+        autopilot = mavutil.mavlink_connection(f'tcp:127.0.0.1:{tcp_port}', source_system=1)
         # Establish routing by sending initial heartbeat
         autopilot.mav.heartbeat_send(
             mavutil.mavlink.MAV_TYPE_QUADROTOR,
@@ -100,7 +124,7 @@ block_msg_id_out = [0]
 
         # Connect UDP client as GCS (sysid=254)
         print("\n[4/6] Connecting UDP GCS (sysid=254)...")
-        gcs = mavutil.mavlink_connection('udpout:127.0.0.1:14556', source_system=254)
+        gcs = mavutil.mavlink_connection(f'udpout:127.0.0.1:{udp_port}', source_system=254)
         # Send heartbeat to establish routing
         gcs.mav.heartbeat_send(
             mavutil.mavlink.MAV_TYPE_GCS,
@@ -171,7 +195,7 @@ block_msg_id_out = [0]
         # Test deduplication
         print("\n[6/6] Testing deduplication...")
         # Connect a second TCP client to observe dedup
-        observer = mavutil.mavlink_connection('tcp:127.0.0.1:5766', source_system=200)
+        observer = mavutil.mavlink_connection(f'tcp:127.0.0.1:{tcp_port}', source_system=200)
         observer.mav.heartbeat_send(
             mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
             mavutil.mavlink.MAV_AUTOPILOT_INVALID,

@@ -46,6 +46,26 @@ def wait_for_tcp(host, port, timeout=10):
     return False
 
 
+def claim_tcp_port():
+    """Reserve an ephemeral TCP port (bind 127.0.0.1:0, read port, release).
+    Same idiom as the Rust `claim_tcp_ports` helper — avoids hard-coding
+    ports per CLAUDE.md, narrow bind race between release and re-bind."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def claim_udp_port():
+    """Reserve an ephemeral UDP port. See [claim_tcp_port]."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
 def query_stats_socket(socket_path, command, timeout=5):
     """Send a command to the Unix stats socket and return the response."""
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -68,6 +88,10 @@ def main():
     config_path = tempfile.mktemp(suffix='.toml')
     proc = None
 
+    # Claim ephemeral ports before writing the config.
+    tcp_port = claim_tcp_port()
+    udp_port = claim_udp_port()
+
     try:
         subprocess.run(['pkill', '-9', 'mavrouter'], capture_output=True)
         time.sleep(1)
@@ -77,14 +101,14 @@ def main():
         config = f"""
 [general]
 bus_capacity = 1000
-tcp_port = 5763
+tcp_port = {tcp_port}
 stats_socket_path = "{stats_socket}"
 stats_sample_interval_secs = 1
 stats_log_interval_secs = 60
 
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:14553"
+address = "127.0.0.1:{udp_port}"
 mode = "server"
 """
         with open(config_path, 'w') as f:
@@ -98,7 +122,7 @@ mode = "server"
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT
         )
-        if not wait_for_tcp('127.0.0.1', 5763, timeout=10):
+        if not wait_for_tcp('127.0.0.1', tcp_port, timeout=10):
             print("ERROR: Router failed to start")
             if proc:
                 out = proc.stdout.read().decode('utf-8', errors='replace') if proc.stdout else ''
@@ -134,7 +158,7 @@ mode = "server"
         # Step 4: Send traffic
         print("\n[4/6] Sending traffic...")
         # Connect TCP client and send heartbeats
-        tcp_master = mavutil.mavlink_connection('tcp:127.0.0.1:5763', source_system=1)
+        tcp_master = mavutil.mavlink_connection(f'tcp:127.0.0.1:{tcp_port}', source_system=1)
         for _ in range(20):
             tcp_master.mav.heartbeat_send(
                 mavutil.mavlink.MAV_TYPE_QUADROTOR,
@@ -144,7 +168,7 @@ mode = "server"
             time.sleep(0.05)
 
         # Connect UDP client and send heartbeats
-        udp_master = mavutil.mavlink_connection('udpout:127.0.0.1:14553', source_system=254)
+        udp_master = mavutil.mavlink_connection(f'udpout:127.0.0.1:{udp_port}', source_system=254)
         for _ in range(20):
             udp_master.mav.heartbeat_send(
                 mavutil.mavlink.MAV_TYPE_GCS,

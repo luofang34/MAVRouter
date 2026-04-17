@@ -40,6 +40,28 @@ def wait_for_tcp(host, port, timeout=10):
     return False
 
 
+def claim_tcp_port():
+    """Reserve an ephemeral TCP port (bind 127.0.0.1:0, read the kernel-
+    assigned port, release). Same idiom as the Rust `claim_tcp_ports`
+    helper — avoids CLAUDE.md's ban on hard-coded test ports. Narrow
+    race window between release and the router re-binding, same as the
+    Rust side."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def claim_udp_port():
+    """Reserve an ephemeral UDP port. See [claim_tcp_port]."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
 def main():
     print("=" * 50)
     print("Config Directory Test")
@@ -48,6 +70,10 @@ def main():
     # Create temp config directory
     config_dir = tempfile.mkdtemp(prefix='mavrouter_confdir_')
     proc = None
+
+    # Claim ephemeral ports before writing the config.
+    tcp_port = claim_tcp_port()
+    udp_port = claim_udp_port()
 
     try:
         # Kill any existing router on our test ports
@@ -59,18 +85,18 @@ def main():
 
         # 00-general.toml: base settings
         with open(os.path.join(config_dir, '00-general.toml'), 'w') as f:
-            f.write("""
+            f.write(f"""
 [general]
 bus_capacity = 1000
-tcp_port = 5762
+tcp_port = {tcp_port}
 """)
 
         # 10-udp.toml: UDP endpoint
         with open(os.path.join(config_dir, '10-udp.toml'), 'w') as f:
-            f.write("""
+            f.write(f"""
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:14552"
+address = "127.0.0.1:{udp_port}"
 mode = "server"
 """)
 
@@ -103,20 +129,20 @@ bus_capacity = 3000
         )
 
         # Step 3: Verify TCP port from config dir is open
-        print("\n[3/5] Waiting for TCP port 5762...")
-        if not wait_for_tcp('127.0.0.1', 5762, timeout=10):
-            print("ERROR: TCP port 5762 not available — config dir not loaded")
+        print(f"\n[3/5] Waiting for TCP port {tcp_port}...")
+        if not wait_for_tcp('127.0.0.1', tcp_port, timeout=10):
+            print(f"ERROR: TCP port {tcp_port} not available — config dir not loaded")
             if proc:
                 out = proc.stdout.read().decode('utf-8', errors='replace') if proc.stdout else ''
                 print(f"Router output:\n{out[:2000]}")
                 proc.kill()
             sys.exit(1)
-        print("TCP port 5762 is open (from 00-general.toml)")
+        print(f"TCP port {tcp_port} is open (from 00-general.toml)")
 
         # Step 4: Verify MAVLink connection works via TCP
         print("\n[4/5] Verifying MAVLink connection via TCP...")
         try:
-            master = mavutil.mavlink_connection('tcp:127.0.0.1:5762', source_system=254)
+            master = mavutil.mavlink_connection(f'tcp:127.0.0.1:{tcp_port}', source_system=254)
             master.mav.ping_send(int(time.time() * 1000000), 0, 0, 0)
             time.sleep(0.5)
             master.close()
@@ -129,7 +155,7 @@ bus_capacity = 3000
         # Step 5: Verify UDP endpoint is active by sending to it
         print("\n[5/5] Verifying UDP endpoint from 10-udp.toml...")
         try:
-            udp_master = mavutil.mavlink_connection('udpout:127.0.0.1:14552', source_system=1)
+            udp_master = mavutil.mavlink_connection(f'udpout:127.0.0.1:{udp_port}', source_system=1)
             udp_master.mav.heartbeat_send(
                 mavutil.mavlink.MAV_TYPE_QUADROTOR,
                 mavutil.mavlink.MAV_AUTOPILOT_PX4,
@@ -137,7 +163,7 @@ bus_capacity = 3000
             )
             time.sleep(0.5)
             udp_master.close()
-            print("UDP endpoint 14552 accepted data (from 10-udp.toml)")
+            print(f"UDP endpoint {udp_port} accepted data (from 10-udp.toml)")
         except Exception as e:
             print(f"ERROR: UDP endpoint not active: {e}")
             proc.kill()
