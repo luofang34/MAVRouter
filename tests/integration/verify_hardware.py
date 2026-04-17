@@ -1,12 +1,18 @@
+import os
 import sys
 import time
 from pymavlink import mavutil
+
+# CI sets MAVROUTER_TCP_PORT to an ephemeral port it claimed before
+# starting the router; fall back to 5760 for local runs.
+TCP_PORT = int(os.environ.get('MAVROUTER_TCP_PORT', 5760))
+
 
 def main():
     print("Connecting to router...")
     # Connect to TCP port exposed by router
     # mavrouter-rs is Server, so we are Client.
-    master = mavutil.mavlink_connection('tcp:127.0.0.1:5760')
+    master = mavutil.mavlink_connection(f'tcp:127.0.0.1:{TCP_PORT}')
 
     print("Waiting for heartbeat...")
     # Wait for a heartbeat

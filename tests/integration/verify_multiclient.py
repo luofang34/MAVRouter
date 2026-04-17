@@ -1,16 +1,22 @@
+import os
 import sys
 import time
 import threading
 from pymavlink import mavutil
 
+# CI sets MAVROUTER_TCP_PORT to an ephemeral port it claimed before
+# starting the router; fall back to 5760 for local runs.
+TCP_PORT = int(os.environ.get('MAVROUTER_TCP_PORT', 5760))
+
 # Shared state
 client_results = [False, False]
+
 
 def heartbeat_sender():
     """Simulates autopilot sending heartbeats via TCP"""
     try:
         time.sleep(0.5)  # Let main setup finish
-        master = mavutil.mavlink_connection('tcp:127.0.0.1:5760', source_system=1)
+        master = mavutil.mavlink_connection(f'tcp:127.0.0.1:{TCP_PORT}', source_system=1)
         for _ in range(30):  # Send for 15 seconds
             master.mav.heartbeat_send(
                 mavutil.mavlink.MAV_TYPE_QUADROTOR,
@@ -26,7 +32,7 @@ def client_task(index):
     try:
         # Create a unique connection
         # Note: socket.create_connection might need unique source ports but OS handles that.
-        master = mavutil.mavlink_connection('tcp:127.0.0.1:5760')
+        master = mavutil.mavlink_connection(f'tcp:127.0.0.1:{TCP_PORT}')
         
         print(f"[Client {index}] Connected. Waiting for heartbeat...")
         

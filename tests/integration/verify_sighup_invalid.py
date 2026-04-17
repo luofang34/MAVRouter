@@ -41,7 +41,29 @@ def wait_for_tcp(host, port, timeout=10):
     return False
 
 
-def verify_connection(port=5760):
+def claim_tcp_port():
+    """Reserve an ephemeral TCP port (bind 127.0.0.1:0, read port, release).
+    Mirrors the Rust `claim_tcp_ports` helper — narrow bind race between
+    release and re-bind, same as elsewhere."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def claim_udp_port():
+    """Reserve an ephemeral UDP port. See [claim_tcp_port]."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def verify_connection(port):
     """Verify we can establish MAVLink connection"""
     try:
         master = mavutil.mavlink_connection(f'tcp:127.0.0.1:{port}', timeout=5)
@@ -61,15 +83,19 @@ def main():
     # Create temp config file
     config_path = tempfile.mktemp(suffix='.toml')
 
+    # Claim ephemeral ports before writing the config.
+    tcp_port = claim_tcp_port()
+    udp_port = claim_udp_port()
+
     # Valid config initially
-    valid_config = """
+    valid_config = f"""
 [general]
 bus_capacity = 1000
-tcp_port = 5760
+tcp_port = {tcp_port}
 
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:14550"
+address = "127.0.0.1:{udp_port}"
 mode = "server"
 """
 
@@ -97,7 +123,7 @@ tcp_port = not_a_number
             stderr=subprocess.STDOUT
         )
 
-        if not wait_for_tcp('127.0.0.1', 5760, timeout=10):
+        if not wait_for_tcp('127.0.0.1', tcp_port, timeout=10):
             print("ERROR: Router failed to start")
             proc.kill()
             sys.exit(1)
@@ -105,7 +131,7 @@ tcp_port = not_a_number
 
         # Step 2: Verify initial connection
         print("\n[2/5] Verifying initial connection...")
-        if not verify_connection():
+        if not verify_connection(tcp_port):
             print("ERROR: Cannot connect to router")
             proc.kill()
             sys.exit(1)
@@ -133,7 +159,7 @@ tcp_port = not_a_number
 
         # Step 5: Verify connection still works (old config still active)
         print("\n[5/5] Verifying connection still works...")
-        if not verify_connection():
+        if not verify_connection(tcp_port):
             print("ERROR: Router stopped accepting connections after invalid SIGHUP")
             proc.kill()
             sys.exit(1)
