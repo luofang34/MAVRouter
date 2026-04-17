@@ -116,8 +116,9 @@ fn test_endpoint_stats_snapshot_display() {
         bytes_in: 1000,
         bytes_out: 2000,
         errors: 3,
+        bus_lagged: 7,
     };
-    assert_eq!(format!("{}", snap), "in=10/1000 out=20/2000 err=3");
+    assert_eq!(format!("{}", snap), "in=10/1000 out=20/2000 err=3 lagged=7");
 }
 
 #[test]
@@ -200,7 +201,7 @@ fn make_heartbeat_frame(system_id: u8, component_id: u8, sequence: u8) -> Mavlin
 /// non-blocking submission path works.
 fn make_core(
     id: usize,
-    bus_tx: tokio::sync::broadcast::Sender<RoutedMessage>,
+    bus_tx: tokio::sync::broadcast::Sender<Arc<RoutedMessage>>,
     routing_table: Arc<parking_lot::RwLock<RoutingTable>>,
     dedup_period: Duration,
     filters: EndpointFilters,
@@ -485,10 +486,12 @@ async fn test_stream_loopback() {
             component_id: 0,
         },
     };
-    bus.tx.send(msg_out).unwrap();
+    bus.tx.send(Arc::new(msg_out)).unwrap();
 
     let mut client_rx_buf = [0u8; 1024];
     let n = client.read(&mut client_rx_buf).await.unwrap();
     assert!(n > 0);
     assert_eq!(client_rx_buf[0], 0xFD); // MAVLink v2 magic
 }
+
+mod lagged;

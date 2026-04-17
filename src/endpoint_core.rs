@@ -37,6 +37,10 @@ pub struct EndpointStats {
     pub bytes_out: AtomicU64,
     /// Number of errors encountered on this endpoint.
     pub errors: AtomicU64,
+    /// Number of messages dropped because this endpoint's broadcast receiver
+    /// lagged behind the bus and the channel overwrote un-read entries.
+    /// Incremented by the count reported in the `Lagged(n)` branch, not by 1.
+    pub bus_lagged: AtomicU64,
 }
 
 impl EndpointStats {
@@ -53,6 +57,7 @@ impl EndpointStats {
             bytes_in: self.bytes_in.load(Ordering::Relaxed),
             bytes_out: self.bytes_out.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
+            bus_lagged: self.bus_lagged.load(Ordering::Relaxed),
         }
     }
 
@@ -76,14 +81,21 @@ pub struct EndpointStatsSnapshot {
     pub bytes_out: u64,
     /// Number of errors encountered.
     pub errors: u64,
+    /// Number of bus messages the receiver missed because it fell behind.
+    pub bus_lagged: u64,
 }
 
 impl fmt::Display for EndpointStatsSnapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "in={}/{} out={}/{} err={}",
-            self.msgs_in, self.bytes_in, self.msgs_out, self.bytes_out, self.errors
+            "in={}/{} out={}/{} err={} lagged={}",
+            self.msgs_in,
+            self.bytes_in,
+            self.msgs_out,
+            self.bytes_out,
+            self.errors,
+            self.bus_lagged,
         )
     }
 }
@@ -156,7 +168,10 @@ pub struct EndpointCore {
     /// Unique identifier for this endpoint.
     pub id: EndpointId,
     /// Sender half of the global message bus for publishing incoming messages.
-    pub bus_tx: broadcast::Sender<RoutedMessage>,
+    ///
+    /// Messages travel as `Arc<RoutedMessage>` so broadcast fan-out is an
+    /// atomic refcount per subscriber rather than a full struct clone.
+    pub bus_tx: broadcast::Sender<Arc<RoutedMessage>>,
     /// Shared routing table for learning and querying MAVLink network topology.
     ///
     /// The hot path only takes *read* locks here. All writes go through
@@ -295,8 +310,8 @@ impl EndpointCore {
         // Extract target once, cache in RoutedMessage for all endpoints
         let target = extract_target(&frame.message);
 
-        // Send lightweight RoutedMessage (no Arc allocation - message_id cached)
-        if let Err(e) = self.bus_tx.send(RoutedMessage {
+        // Wrap once so every downstream subscriber shares a single allocation.
+        let routed = Arc::new(RoutedMessage {
             source_id: self.id,
             header: frame.header,
             message_id,
@@ -304,7 +319,8 @@ impl EndpointCore {
             timestamp_us,
             serialized_bytes,
             target,
-        }) {
+        });
+        if let Err(e) = self.bus_tx.send(routed) {
             warn!("Bus send error: {:?}", e);
             return;
         }

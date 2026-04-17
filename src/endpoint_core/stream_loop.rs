@@ -6,10 +6,11 @@ use crate::error::{Result, RouterError};
 use crate::framing::StreamParser;
 use crate::router::RoutedMessage;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::error;
 
 /// Runs the main stream processing loop for an endpoint.
 ///
@@ -43,7 +44,7 @@ use tracing::warn;
 pub async fn run_stream_loop<R, W>(
     mut reader: R,
     writer: W,
-    mut bus_rx: broadcast::Receiver<RoutedMessage>,
+    mut bus_rx: broadcast::Receiver<Arc<RoutedMessage>>,
     core: EndpointCore,
     cancel_token: CancellationToken,
     name: String,
@@ -92,7 +93,16 @@ where
             let msg = match bus_rx.recv().await {
                 Ok(msg) => msg,
                 Err(RecvError::Lagged(n)) => {
-                    warn!("{} Sender lagged: missed {} messages", name, n);
+                    // Dropping bus messages is a correctness signal, not
+                    // noise — surface it at error! and count it so the
+                    // stats pipeline picks it up.
+                    core.stats.bus_lagged.fetch_add(n, Ordering::Relaxed);
+                    error!(
+                        "{} bus receiver lagged: dropped {} messages (bus_lagged now {})",
+                        name,
+                        n,
+                        core.stats.bus_lagged.load(Ordering::Relaxed)
+                    );
                     continue;
                 }
                 Err(RecvError::Closed) => break,
@@ -130,7 +140,13 @@ where
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Lagged(n)) => {
-                        warn!("{} Sender lagged: missed {} messages", name, n);
+                        core.stats.bus_lagged.fetch_add(n, Ordering::Relaxed);
+                        error!(
+                            "{} bus receiver lagged (batch): dropped {} messages (bus_lagged now {})",
+                            name,
+                            n,
+                            core.stats.bus_lagged.load(Ordering::Relaxed)
+                        );
                     }
                     Err(TryRecvError::Closed) => return Ok(()),
                 }

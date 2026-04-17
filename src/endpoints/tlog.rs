@@ -8,6 +8,7 @@
 use crate::error::{Result, RouterError};
 use crate::router::RoutedMessage;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, File};
 use tokio::io::AsyncWriteExt;
@@ -43,7 +44,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// - An error occurs during writing to the TLOG file.
 pub async fn run(
     logs_dir: String,
-    mut bus_rx: broadcast::Receiver<RoutedMessage>,
+    mut bus_rx: broadcast::Receiver<Arc<RoutedMessage>>,
     cancel_token: CancellationToken,
 ) -> Result<()> {
     let dir = Path::new(&logs_dir);

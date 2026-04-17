@@ -20,6 +20,7 @@ use bytes::Bytes;
 use mavlink::{MavHeader, MavlinkVersion, Message};
 use serial_test::serial;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
 
@@ -85,7 +86,9 @@ async fn test_tlog_message_format() {
         },
     };
 
-    bus.tx.send(routed_msg).expect("should broadcast message");
+    bus.tx
+        .send(Arc::new(routed_msg))
+        .expect("should broadcast message");
 
     // Wait past the TLog flush interval (1s) with margin.
     tokio::time::sleep(Duration::from_millis(1500)).await;
