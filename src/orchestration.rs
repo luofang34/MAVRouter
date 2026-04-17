@@ -188,6 +188,11 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
             let bus_tx_tlog = bus.sender();
             let dir = log_dir.clone();
             let task_token = cancel_token.child_token();
+            // Counter is held here so a future telemetry surface can
+            // observe TLog bus drops without TLog growing its own
+            // per-endpoint stats struct. For now prod only emits the
+            // event at `error!`; tests read the counter directly.
+            let tlog_bus_lagged = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
             let supervisor_name = name.clone();
             tasks.push(NamedTask::new(
@@ -195,8 +200,9 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                 tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
                     let bus_rx = bus_tx_tlog.subscribe();
                     let dir = dir.clone();
+                    let lagged = tlog_bus_lagged.clone();
                     let token = task_token.clone();
-                    async move { crate::endpoints::tlog::run(dir, bus_rx, token).await }
+                    async move { crate::endpoints::tlog::run(dir, bus_rx, lagged, token).await }
                 })),
             ));
         }
