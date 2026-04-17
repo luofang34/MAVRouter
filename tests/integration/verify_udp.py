@@ -1,7 +1,15 @@
+import os
 import sys
 import time
 import threading
 from pymavlink import mavutil
+
+# CI sets MAVROUTER_TCP_PORT / MAVROUTER_UDP_PORT to ephemeral ports it
+# claimed before starting the router; fall back to 5760 / 14550 when a
+# developer runs this script against a locally-started router.
+TCP_PORT = int(os.environ.get('MAVROUTER_TCP_PORT', 5760))
+UDP_PORT = int(os.environ.get('MAVROUTER_UDP_PORT', 14550))
+
 
 def autopilot_simulator():
     """Simulates a drone sending heartbeats via TCP"""
@@ -9,7 +17,7 @@ def autopilot_simulator():
         # Allow some time for main thread to start
         time.sleep(0.5)
         # Connect as SysID 1
-        master = mavutil.mavlink_connection('tcp:127.0.0.1:5760', source_system=1)
+        master = mavutil.mavlink_connection(f'tcp:127.0.0.1:{TCP_PORT}', source_system=1)
         while True:
             master.mav.heartbeat_send(
                 mavutil.mavlink.MAV_TYPE_QUADROTOR,
@@ -26,7 +34,7 @@ def main():
     sim_thread.start()
 
     print("Connecting via UDP to router...")
-    master = mavutil.mavlink_connection('udpout:127.0.0.1:14550', source_system=254)
+    master = mavutil.mavlink_connection(f'udpout:127.0.0.1:{UDP_PORT}', source_system=254)
 
     print("Sending Heartbeats...")
     

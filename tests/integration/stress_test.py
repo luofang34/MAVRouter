@@ -4,6 +4,11 @@ import os
 import multiprocessing
 from pymavlink import mavutil
 
+# CI sets MAVROUTER_TCP_PORT to an ephemeral port it claimed before
+# starting the router; fall back to 5760 for local runs.
+TCP_PORT = int(os.environ.get('MAVROUTER_TCP_PORT', 5760))
+
+
 def get_stress_packets():
     """Auto-detect system resources and return appropriate packet count"""
     # Environment variable override
@@ -25,7 +30,7 @@ def get_stress_packets():
 def main():
     target_packets = get_stress_packets()
     print("Connecting...")
-    master = mavutil.mavlink_connection('tcp:127.0.0.1:5760')
+    master = mavutil.mavlink_connection(f'tcp:127.0.0.1:{TCP_PORT}')
 
     # Wait for heartbeat with timeout (may not be available in CI without hardware)
     print("Waiting for heartbeat (timeout: 5s)...")

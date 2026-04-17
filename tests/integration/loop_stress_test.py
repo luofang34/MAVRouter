@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import asyncio
@@ -28,7 +29,9 @@ except ImportError:
 
 # Configuration
 TARGET_IP = '127.0.0.1'
-TARGET_PORT = 5760
+# CI sets MAVROUTER_TCP_PORT to an ephemeral port it claimed before
+# starting the router; fall back to 5760 for local runs.
+TARGET_PORT = int(os.environ.get('MAVROUTER_TCP_PORT', 5760))
 
 
 class ByteCapture:

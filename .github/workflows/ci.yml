@@ -177,16 +177,27 @@ jobs:
         run: |
           # Create minimal test config
           mkdir -p logs
+          # Claim ephemeral TCP/UDP ports the same way the Rust tests do —
+          # bind on 127.0.0.1:0, read the kernel-assigned port, close the
+          # throwaway socket. Exported to $GITHUB_ENV so the Python client
+          # scripts (verify_udp.py, stress_test.py, etc.) can connect via
+          # MAVROUTER_TCP_PORT / MAVROUTER_UDP_PORT. Stops two concurrent
+          # CI runs on the same GitHub runner host from colliding on
+          # 5760 / 14550.
+          TCP_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+          UDP_PORT=$(python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); p=s.getsockname()[1]; s.close(); print(p)")
+          echo "MAVROUTER_TCP_PORT=$TCP_PORT" >> "$GITHUB_ENV"
+          echo "MAVROUTER_UDP_PORT=$UDP_PORT" >> "$GITHUB_ENV"
           cat > ci_config.toml << EOF
           [general]
           bus_capacity = 5000
-          tcp_port = 5760
+          tcp_port = $TCP_PORT
           log = "logs"
           log_telemetry = true
 
           [[endpoint]]
           type = "udp"
-          address = "127.0.0.1:14550"
+          address = "127.0.0.1:$UDP_PORT"
           mode = "server"
           EOF
           # Start router in background

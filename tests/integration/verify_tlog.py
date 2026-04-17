@@ -57,19 +57,40 @@ def wait_for_tcp(host, port, timeout=10):
     return False
 
 
-def start_router_with_tlog(logs_dir, config_path):
+def claim_tcp_port():
+    """Reserve an ephemeral TCP port (bind 127.0.0.1:0, read port, release).
+    Mirrors the Rust `claim_tcp_ports` helper."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def claim_udp_port():
+    """Reserve an ephemeral UDP port. See [claim_tcp_port]."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def start_router_with_tlog(logs_dir, config_path, tcp_port, udp_port):
     """Start mavrouter with TLOG enabled"""
     # Create config
     config = f"""
 [general]
 bus_capacity = 1000
-tcp_port = 5760
+tcp_port = {tcp_port}
 log = "{logs_dir}"
 log_telemetry = true
 
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:14550"
+address = "127.0.0.1:{udp_port}"
 mode = "server"
 """
     with open(config_path, 'w') as f:
@@ -84,7 +105,7 @@ mode = "server"
     return proc
 
 
-def send_test_messages(count=10):
+def send_test_messages(tcp_port, count=10):
     """Send test MAVLink messages via TCP
 
     We send HEARTBEAT messages which are always broadcast,
@@ -94,7 +115,7 @@ def send_test_messages(count=10):
     messages with system_id=0 (invalid/placeholder sources).
     """
     master = mavutil.mavlink_connection(
-        'tcp:127.0.0.1:5760',
+        f'tcp:127.0.0.1:{tcp_port}',
         source_system=255,  # GCS system ID (non-zero required)
         source_component=190  # GCS component ID
     )
@@ -200,6 +221,10 @@ def main():
     logs_dir = tempfile.mkdtemp(prefix='mavrouter_tlog_test_')
     config_path = os.path.join(logs_dir, 'test_config.toml')
 
+    # Claim ephemeral ports before writing the config.
+    tcp_port = claim_tcp_port()
+    udp_port = claim_udp_port()
+
     try:
         # Kill any existing router
         subprocess.run(['pkill', '-9', 'mavrouter'], capture_output=True)
@@ -207,9 +232,9 @@ def main():
 
         # Step 1: Start router with TLOG enabled
         print("\n[1/6] Starting router with TLOG enabled...")
-        proc = start_router_with_tlog(logs_dir, config_path)
+        proc = start_router_with_tlog(logs_dir, config_path, tcp_port, udp_port)
 
-        if not wait_for_tcp('127.0.0.1', 5760, timeout=10):
+        if not wait_for_tcp('127.0.0.1', tcp_port, timeout=10):
             print("ERROR: Router failed to start")
             proc.kill()
             sys.exit(1)
@@ -217,7 +242,7 @@ def main():
 
         # Step 2: Send test messages
         print("\n[2/6] Sending test messages...")
-        msg_count = send_test_messages(20)
+        msg_count = send_test_messages(tcp_port, 20)
         print(f"Sent {msg_count} messages")
 
         # Step 3: Wait for messages to be written

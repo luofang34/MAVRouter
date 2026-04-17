@@ -26,6 +26,10 @@ if sys.platform == 'win32':
 
 from pymavlink import mavutil
 
+# CI sets MAVROUTER_TCP_PORT to an ephemeral port it claimed before
+# starting the router; fall back to 5760 for local runs.
+TCP_PORT = int(os.environ.get('MAVROUTER_TCP_PORT', 5760))
+
 
 def find_router_pid():
     """Find mavrouter process ID"""
@@ -60,7 +64,7 @@ def wait_for_tcp(host, port, timeout=10):
     return False
 
 
-def verify_connection(port=5760, timeout=5):
+def verify_connection(port=TCP_PORT, timeout=5):
     """Verify we can establish MAVLink connection"""
     try:
         master = mavutil.mavlink_connection(f'tcp:127.0.0.1:{port}', timeout=timeout)
@@ -124,7 +128,7 @@ def main():
 
     # Wait for TCP port to come back up
     print("Waiting for TCP port...")
-    if not wait_for_tcp('127.0.0.1', 5760, timeout=10):
+    if not wait_for_tcp('127.0.0.1', TCP_PORT, timeout=10):
         print("ERROR: TCP port not available after reload")
         sys.exit(1)
     print("TCP port available")
