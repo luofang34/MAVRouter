@@ -9,10 +9,31 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use mavlink::MavHeader;
-use mavrouter::Router;
-use std::time::Duration;
+use mavrouter::{MessageBus, Router};
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
+
+/// Wait until the router's internal bus has at least `want` subscribers.
+/// UDP and serial endpoints subscribe on spawn; TCP server/client endpoints
+/// subscribe *per accepted or established connection*. Using
+/// `receiver_count()` as the sync primitive gives us a concrete observable
+/// in place of the blind `tokio::time::sleep` these tests used to rely on
+/// — per CLAUDE.md's "synchronize with events, not sleep" rule.
+async fn wait_for_bus_subscribers(bus: &MessageBus, want: usize, budget: Duration) {
+    let deadline = Instant::now() + budget;
+    while bus.tx.receiver_count() < want {
+        if Instant::now() >= deadline {
+            panic!(
+                "only {} bus subscribers after {:?}; expected at least {}",
+                bus.tx.receiver_count(),
+                budget,
+                want,
+            );
+        }
+        tokio::task::yield_now().await;
+    }
+}
 
 /// Reserve `n` ephemeral TCP ports by binding temporary listeners on
 /// 127.0.0.1:0, reading back the kernel-assigned ports, then dropping
@@ -82,50 +103,47 @@ mode = "server"
 
     let router = Router::from_str(&toml_config).await.unwrap();
 
-    // Wait for the router's TCP-server endpoint to accept connections
-    // (instead of a blind sleep). Poll with a short backoff bounded by
-    // a 5s budget — in practice this succeeds on the first try.
+    // The UDP-client endpoint subscribes to the bus on spawn, but that
+    // subscribe runs inside a spawned task — it's live some time after
+    // `from_str` returns. Wait for it as a bus-subscriber count instead
+    // of a blind sleep. The heartbeat must go nowhere if UDP hasn't
+    // subscribed by the time TCP-server publishes.
+    wait_for_bus_subscribers(router.bus(), 1, Duration::from_secs(5)).await;
+
+    // Poll until the router's TCP-server endpoint is accepting — avoids
+    // the race between the helper's port-release and the router's bind.
     let mut tcp_client = {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             match TcpStream::connect(format!("127.0.0.1:{tcp_port}")).await {
                 Ok(s) => break s,
-                Err(_) if std::time::Instant::now() < deadline => {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+                Err(_) if Instant::now() < deadline => {
+                    tokio::task::yield_now().await;
                 }
                 Err(e) => panic!("router tcp endpoint never became connectable: {}", e),
             }
         }
     };
 
+    // TCP-server spawns a writer task per accepted connection that *also*
+    // subscribes to the bus. Wait for it so we know the server has fully
+    // processed our connect before we push data into it.
+    wait_for_bus_subscribers(router.bus(), 2, Duration::from_secs(5)).await;
+
     let heartbeat = build_heartbeat_bytes();
+    tcp_client.write_all(&heartbeat).await.unwrap();
 
+    // Single bounded read — no retry loop needed: we've already confirmed
+    // both endpoints are subscribed, so the heartbeat must traverse the
+    // bus and land on udp_recv. If it doesn't within 2 s, routing is
+    // broken, not merely slow.
     let mut udp_buf = [0u8; 1024];
-    let mut received = false;
-
-    // Retry loop: the TCP client has just connected, but the router's
-    // broadcast-subscriber registration happens asynchronously on the
-    // accept path. Repeated sends tolerate the race without a blind
-    // sleep before the loop.
-    for _ in 0..10 {
-        tcp_client.write_all(&heartbeat).await.unwrap();
-
-        match tokio::time::timeout(Duration::from_millis(500), udp_recv.recv(&mut udp_buf)).await {
-            Ok(Ok(n)) if n > 0 => {
-                assert_eq!(udp_buf[0], 0xFD, "Expected MAVLink v2 magic byte");
-                received = true;
-                break;
-            }
-            _ => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-    }
-
-    assert!(
-        received,
-        "Failed to receive heartbeat on UDP socket from router's UDP client endpoint"
-    );
+    let n = tokio::time::timeout(Duration::from_secs(2), udp_recv.recv(&mut udp_buf))
+        .await
+        .expect("udp recv timed out — heartbeat never traversed the bus")
+        .unwrap();
+    assert!(n > 0, "udp_recv returned a zero-length packet");
+    assert_eq!(udp_buf[0], 0xFD, "Expected MAVLink v2 magic byte");
 
     router.stop().await;
 }
@@ -170,6 +188,15 @@ mode = "server"
             .expect("Timeout waiting for router to connect as TCP client")
             .unwrap();
 
+    // Two expected subscribers at steady state:
+    //   1. UDP-server endpoint, subscribed on spawn.
+    //   2. TCP-client's per-connection writer, subscribed after the
+    //      router-side `TcpStream::connect` returns (which is what our
+    //      accept() just observed).
+    // Waiting for count ≥ 2 covers the window between accept() returning
+    // on our side and subscribe() completing on the router's side.
+    wait_for_bus_subscribers(router.bus(), 2, Duration::from_secs(5)).await;
+
     let udp_sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     udp_sender
         .connect(format!("127.0.0.1:{udp_port}"))
@@ -177,30 +204,17 @@ mode = "server"
         .unwrap();
 
     let heartbeat = build_heartbeat_bytes();
+    udp_sender.send(&heartbeat).await.unwrap();
 
+    // Bounded single read; both endpoints are subscribed so the heartbeat
+    // must traverse UDP → bus → TCP within budget.
     let mut tcp_buf = [0u8; 1024];
-    let mut received = false;
-
-    for _ in 0..10 {
-        udp_sender.send(&heartbeat).await.unwrap();
-
-        match tokio::time::timeout(Duration::from_millis(500), tcp_stream.read(&mut tcp_buf)).await
-        {
-            Ok(Ok(n)) if n > 0 => {
-                assert_eq!(tcp_buf[0], 0xFD, "Expected MAVLink v2 magic byte");
-                received = true;
-                break;
-            }
-            _ => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-    }
-
-    assert!(
-        received,
-        "Failed to receive heartbeat on TCP stream from router's TCP client endpoint"
-    );
+    let n = tokio::time::timeout(Duration::from_secs(2), tcp_stream.read(&mut tcp_buf))
+        .await
+        .expect("tcp read timed out — heartbeat never traversed the bus")
+        .unwrap();
+    assert!(n > 0, "tcp_stream returned a zero-length read");
+    assert_eq!(tcp_buf[0], 0xFD, "Expected MAVLink v2 magic byte");
 
     router.stop().await;
 }
@@ -229,12 +243,12 @@ mode = "server"
     // Poll until the router's TCP-server endpoint is accepting — avoids
     // the race between the helper's port-release and the router's bind.
     let first_client = {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             match TcpStream::connect(format!("127.0.0.1:{tcp_port}")).await {
                 Ok(s) => break s,
-                Err(_) if std::time::Instant::now() < deadline => {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+                Err(_) if Instant::now() < deadline => {
+                    tokio::task::yield_now().await;
                 }
                 Err(e) => panic!("router tcp endpoint never became connectable: {}", e),
             }
@@ -255,8 +269,12 @@ mode = "server"
         }
     }
 
-    // Let the server process all accepts before we probe the limit.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Wait for all 100 accept paths to finish — each successful accept
+    // spawns a per-connection writer that subscribes to the bus. Waiting
+    // for `receiver_count() == 100` is the concrete observable proving
+    // the server has accepted all 100 and is at its limit, replacing the
+    // old blind 500 ms margin.
+    wait_for_bus_subscribers(router.bus(), 100, Duration::from_secs(5)).await;
 
     // The 101st connection is accepted at the TCP level but the server
     // drops its side of the stream immediately. Any of: EOF, read error,
