@@ -41,7 +41,6 @@ dashmap = "5.5"
 memchr = "2.7"
 
 [dev-dependencies]
-serial_test = "3.0"
 criterion = "0.5"
 num_cpus = "1.16"
 tempfile = "3.10"

@@ -18,7 +18,6 @@ use crate::mavlink_utils::MessageTarget;
 use crate::router::{create_bus, EndpointId, RoutedMessage};
 use bytes::Bytes;
 use mavlink::{MavHeader, MavlinkVersion, Message};
-use serial_test::serial;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -48,7 +47,6 @@ fn cleanup_test_dir(dir: &std::path::Path) {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_tlog_message_format() {
     let temp_dir = create_test_dir("tlog_format");
 
@@ -168,7 +166,6 @@ async fn test_tlog_message_format() {
 /// it with a tiny cancel window. The task's first `recv()` returns one
 /// big `Lagged(n)`, which must bump the injected `bus_lagged` counter.
 #[tokio::test]
-#[serial]
 async fn tlog_counts_lagged_from_bus() {
     let temp_dir = create_test_dir("tlog_lagged");
 
