@@ -32,7 +32,6 @@ use crate::error::{Result, RouterError};
 use crate::orchestration::{shutdown_with_timeout, NamedTask};
 use crate::router::{EndpointId, MessageBus};
 use crate::routing::RoutingTable;
-use parking_lot::RwLock;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,7 +71,7 @@ pub struct Router {
     cancel_token: CancellationToken,
     tasks: Vec<NamedTask>,
     bus: MessageBus,
-    routing_table: Arc<RwLock<RoutingTable>>,
+    routing_table: Arc<RoutingTable>,
     endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,
 }
 
@@ -180,7 +179,7 @@ impl Router {
     ///
     /// This can be used to query learned routes or inspect the
     /// network topology.
-    pub fn routing_table(&self) -> &Arc<RwLock<RoutingTable>> {
+    pub fn routing_table(&self) -> &Arc<RoutingTable> {
         &self.routing_table
     }
 
@@ -292,7 +291,7 @@ address = "127.0.0.1:24552"
 mode = "server"
 "#;
         let router = Router::from_str(toml).await.expect("should start");
-        let stats = router.routing_table().read().stats();
+        let stats = router.routing_table().stats();
         assert_eq!(stats.total_systems, 0);
         router.stop().await;
     }

@@ -31,7 +31,7 @@ async fn test_bus_lagged_counter_increments_on_flooding() {
 
     // Capacity 2 → anything past the second send overwrites older entries.
     let bus = create_bus(2);
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
     let cancel = CancellationToken::new();
 
     let core = make_core(

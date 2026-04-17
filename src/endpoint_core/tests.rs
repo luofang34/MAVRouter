@@ -202,7 +202,7 @@ fn make_heartbeat_frame(system_id: u8, component_id: u8, sequence: u8) -> Mavlin
 fn make_core(
     id: usize,
     bus_tx: tokio::sync::broadcast::Sender<Arc<RoutedMessage>>,
-    routing_table: Arc<parking_lot::RwLock<RoutingTable>>,
+    routing_table: Arc<RoutingTable>,
     dedup_period: Duration,
     filters: EndpointFilters,
 ) -> EndpointCore {
@@ -224,7 +224,7 @@ fn make_core(
 async fn test_handle_incoming_happy_path() {
     let bus = create_bus(100);
     let mut rx = bus.subscribe();
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
 
     let core = make_core(
         1,
@@ -247,7 +247,7 @@ async fn test_handle_incoming_happy_path() {
 async fn test_handle_incoming_sysid_zero_rejected() {
     let bus = create_bus(100);
     let mut rx = bus.subscribe();
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
 
     let core = make_core(
         1,
@@ -269,7 +269,7 @@ async fn test_handle_incoming_sysid_zero_rejected() {
 async fn test_handle_incoming_filter_rejection() {
     let bus = create_bus(100);
     let mut rx = bus.subscribe();
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
 
     // Block msg_id=0 (HEARTBEAT) on incoming.
     let filters = EndpointFilters {
@@ -291,7 +291,7 @@ async fn test_handle_incoming_filter_rejection() {
 async fn test_handle_incoming_dedup_rejection() {
     let bus = create_bus(100);
     let mut rx = bus.subscribe();
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
 
     let core = make_core(
         1,
@@ -316,7 +316,7 @@ fn test_check_outgoing_self_origin_rejected() {
     use crate::mavlink_utils::MessageTarget;
 
     let bus = create_bus(100);
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
     let core = make_core(
         1,
         bus.sender(),
@@ -350,7 +350,7 @@ fn test_check_outgoing_filter_rejection() {
     use crate::mavlink_utils::MessageTarget;
 
     let bus = create_bus(100);
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
 
     let filters = EndpointFilters {
         block_msg_id_out: HashSet::from([30]),
@@ -384,7 +384,7 @@ fn test_check_outgoing_pass_through() {
     use crate::mavlink_utils::MessageTarget;
 
     let bus = create_bus(100);
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
 
     let core = make_core(
         1,
@@ -425,7 +425,7 @@ async fn test_stream_loopback() {
     use tokio_util::sync::CancellationToken;
 
     let bus = create_bus(100);
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
     let token = CancellationToken::new();
 
     let core = make_core(

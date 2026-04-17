@@ -18,7 +18,7 @@ use std::time::Instant;
 
 #[test]
 fn test_grouped_endpoints_share_routing() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep0 = EndpointId(0);
     let ep1 = EndpointId(1);
 
@@ -34,7 +34,7 @@ fn test_grouped_endpoints_share_routing() {
 
 #[test]
 fn test_ungrouped_endpoints_independent() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep0 = EndpointId(0);
     let ep1 = EndpointId(1);
 
@@ -47,7 +47,7 @@ fn test_ungrouped_endpoints_independent() {
 
 #[test]
 fn test_group_with_three_endpoints() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep0 = EndpointId(0);
     let ep1 = EndpointId(1);
     let ep2 = EndpointId(2);
@@ -66,7 +66,7 @@ fn test_group_with_three_endpoints() {
 
 #[test]
 fn test_mixed_grouped_and_ungrouped() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep0 = EndpointId(0);
     let ep1 = EndpointId(1);
     let ep2 = EndpointId(2);
@@ -90,7 +90,7 @@ fn test_empty_group_string_ignored() {
     // Config layer strips empty group names (`""` → `None`). At the routing
     // layer empty strings do group together by design; this test documents
     // that invariant so a refactor at either layer has to update both.
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep0 = EndpointId(0);
     let ep1 = EndpointId(1);
 
@@ -105,7 +105,7 @@ fn test_empty_group_string_ignored() {
 
 #[test]
 fn test_grouped_endpoints_system_broadcast() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep0 = EndpointId(0);
     let ep1 = EndpointId(1);
 
@@ -125,7 +125,7 @@ fn test_grouped_endpoints_system_broadcast() {
 
 #[test]
 fn test_sniffer_mode_receives_all() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep0 = EndpointId(0);
     let ep1 = EndpointId(1);
 
@@ -143,7 +143,7 @@ fn test_sniffer_mode_receives_all() {
 
 #[test]
 fn test_sniffer_mode_no_effect_without_sysid() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep0 = EndpointId(0);
     let ep1 = EndpointId(1);
 
@@ -160,7 +160,7 @@ fn test_sniffer_mode_no_effect_without_sysid() {
 
 #[test]
 fn test_sniffer_and_normal_endpoints_coexist() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep_sniffer = EndpointId(0);
     let ep_normal = EndpointId(1);
 
@@ -181,7 +181,7 @@ fn test_sniffer_and_normal_endpoints_coexist() {
 
 #[test]
 fn test_basic_routing_without_groups() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let ep0 = EndpointId(0);
     let ep1 = EndpointId(1);
 

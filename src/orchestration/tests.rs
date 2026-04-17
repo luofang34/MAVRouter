@@ -123,7 +123,7 @@ const MIN_TICKS_PER_TASK: u64 = 1_000;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn routing_writer_and_reader_fairness_under_contention() {
-    let routing_table = Arc::new(parking_lot::RwLock::new(RoutingTable::new()));
+    let routing_table = Arc::new(RoutingTable::new());
     let (update_tx, update_rx) = mpsc::channel::<RouteUpdate>(4096);
     let cancel = CancellationToken::new();
 
@@ -178,10 +178,7 @@ async fn routing_writer_and_reader_fairness_under_contention() {
         handles.push(tokio::spawn(async move {
             let mut sys_id: u8 = 1;
             while !cancel.is_cancelled() {
-                let decision = {
-                    let guard = rt.read();
-                    guard.should_send(endpoint_id, sys_id, 1)
-                };
+                let decision = rt.should_send(endpoint_id, sys_id, 1);
                 std::hint::black_box(decision);
                 ticks.fetch_add(1, Ordering::Relaxed);
                 sys_id = sys_id.wrapping_add(1);
@@ -238,7 +235,7 @@ async fn routing_writer_and_reader_fairness_under_contention() {
         reader_total
     );
 
-    let stats = routing_table.read().stats();
+    let stats = routing_table.as_ref().stats();
     assert!(
         stats.total_systems > 0,
         "updater task applied no updates — check channel wiring"

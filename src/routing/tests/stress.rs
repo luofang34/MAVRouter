@@ -11,7 +11,6 @@
 
 use crate::router::EndpointId;
 use crate::routing::*;
-use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Instant;
 // ============================================================================
@@ -37,7 +36,7 @@ fn stress_iterations() -> usize {
 
 #[test]
 fn test_routing_table_stress_functional() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
 
     for endpoint in 0..10 {
         for sys in 1..=100 {
@@ -64,7 +63,7 @@ fn test_routing_table_stress_functional() {
 
 #[tokio::test]
 async fn test_routing_table_concurrent_access_async() {
-    let rt = Arc::new(RwLock::new(RoutingTable::new()));
+    let rt = Arc::new(RoutingTable::new());
 
     let mut handles = vec![];
 
@@ -72,8 +71,7 @@ async fn test_routing_table_concurrent_access_async() {
         let rt_clone = rt.clone();
         handles.push(tokio::spawn(async move {
             for j in 0..100 {
-                let mut rt_lock = rt_clone.write();
-                rt_lock.update(EndpointId(i), (j % 255) as u8, 1, Instant::now());
+                rt_clone.update(EndpointId(i), (j % 255) as u8, 1, Instant::now());
             }
         }));
     }
@@ -82,8 +80,7 @@ async fn test_routing_table_concurrent_access_async() {
         let rt_clone = rt.clone();
         handles.push(tokio::spawn(async move {
             for j in 0..100 {
-                let rt_lock = rt_clone.read();
-                let _ = rt_lock.should_send(EndpointId(0), (j % 255) as u8, 1);
+                let _ = rt_clone.should_send(EndpointId(0), (j % 255) as u8, 1);
             }
         }));
     }

@@ -7,7 +7,6 @@
 use crate::endpoint_core::EndpointStats;
 use crate::router::EndpointId;
 use crate::routing::RoutingTable;
-use parking_lot::RwLock;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -18,7 +17,7 @@ use tracing::{info, warn};
 
 pub async fn run_stats_server(
     socket_path: String,
-    routing_table: Arc<RwLock<RoutingTable>>,
+    routing_table: Arc<RoutingTable>,
     ep_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,
     token: CancellationToken,
 ) -> crate::error::Result<()> {
@@ -71,8 +70,7 @@ pub async fn run_stats_server(
                             let command = String::from_utf8_lossy(&buf[..n]).trim().to_string();
                             let response = match command.as_str() {
                                 "stats" => {
-                                    let rt_guard = rt.read();
-                                    let stats = rt_guard.stats();
+                                    let stats = rt.stats();
                                     format!(
                                         r#"{{"total_systems":{},"total_routes":{},"total_endpoints":{},"timestamp":{}}}"#,
                                         stats.total_systems,

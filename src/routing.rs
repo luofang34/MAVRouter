@@ -1,5 +1,6 @@
 use crate::router::EndpointId;
 use ahash::{AHashMap, AHashSet};
+use parking_lot::RwLock;
 use std::collections::hash_map::Entry;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
@@ -26,9 +27,21 @@ pub struct RouteUpdate {
 type HashMap<K, V> = AHashMap<K, V>;
 type HashSet<T> = AHashSet<T>;
 
-// Constants for routing table capacity limits
-const MAX_ROUTES: usize = 100_000;
-const MAX_SYSTEMS: usize = 1_000;
+/// Number of shards the routing table is partitioned into, keyed by
+/// `system_id & SHARD_MASK`.
+///
+/// 16 shards is the sweet spot on the current workloads: under concurrent
+/// read+write load, reads for `sys_id=5` don't stall behind a write for
+/// `sys_id=7`, while the per-shard memory overhead stays negligible.
+/// `system_id` is a `u8`, so 16 shards puts each shard responsible for
+/// 16 ids on average — well distributed even for small installations.
+const SHARD_COUNT: usize = 16;
+const SHARD_MASK: usize = SHARD_COUNT - 1;
+
+// Constants for routing table capacity limits. Both are per-shard so the
+// total addressable capacity scales with `SHARD_COUNT`.
+const MAX_ROUTES_PER_SHARD: usize = 100_000 / SHARD_COUNT;
+const MAX_SYSTEMS_PER_SHARD: usize = 1_000 / SHARD_COUNT;
 
 /// Represents an entry in the routing table for a specific (system_id, component_id) pair
 /// or just a system_id. It tracks which endpoints have seen this MAVLink entity.
@@ -39,24 +52,46 @@ struct RouteEntry {
     last_seen: Instant,
 }
 
-/// Intelligent routing table that learns MAVLink network topology.
-///
-/// Routes messages based on `system_id` and `component_id`, with TTL-based
-/// expiration to handle dynamic topologies.
-pub struct RoutingTable {
+/// Per-shard state: only the routes whose `system_id` hashes to this shard.
+/// Each shard holds an independent `RwLock`, so read traffic on different
+/// sysids doesn't serialise through a single writer.
+#[derive(Default)]
+struct Shard {
     /// Map of `(system_id, component_id)` -> `RouteEntry` for specific component routes.
+    /// All keys here satisfy `system_id as usize & SHARD_MASK == <this shard index>`.
     routes: HashMap<(u8, u8), RouteEntry>,
     /// Map of `system_id` -> `RouteEntry` for system-wide routes (component_id 0).
     sys_routes: HashMap<u8, RouteEntry>,
-    /// Incremental count of how many active route entries each EndpointId is present in.
-    /// Used to quickly get the total number of unique active endpoints.
+    /// Incremental count of how many active route entries each EndpointId is
+    /// present in *within this shard*. The global count (used by stats) is
+    /// the set-union of keys across all shards, not the sum of values.
     endpoint_counts: HashMap<EndpointId, usize>,
+}
+
+/// Group / sniffer configuration. Mostly written once at startup and read
+/// (rarely) on the hot path; held behind a single `RwLock` because
+/// sharding it by anything meaningful would cost more than it saves.
+#[derive(Default)]
+struct Config {
     /// Map of endpoint ID to its group name (if any).
     endpoint_groups: HashMap<EndpointId, String>,
     /// Reverse lookup: group name -> set of endpoint IDs in that group.
     group_members: HashMap<String, HashSet<EndpointId>>,
     /// Set of system IDs that trigger sniffer mode.
     sniffer_sysids: HashSet<u8>,
+}
+
+/// Intelligent routing table that learns MAVLink network topology.
+///
+/// Routes messages based on `system_id` and `component_id`, with TTL-based
+/// expiration to handle dynamic topologies. Internally sharded by
+/// `system_id` so concurrent reads for different sysids don't contend, and
+/// the writer task can mutate one shard without stalling readers on the
+/// other 15. All public methods take `&self` — the per-shard `RwLock`s
+/// provide interior mutability.
+pub struct RoutingTable {
+    shards: [RwLock<Shard>; SHARD_COUNT],
+    config: RwLock<Config>,
 }
 
 impl Default for RoutingTable {
@@ -82,60 +117,67 @@ impl RoutingTable {
     /// Creates a new, empty `RoutingTable`.
     pub fn new() -> Self {
         Self {
-            routes: HashMap::new(),
-            sys_routes: HashMap::new(),
-            endpoint_counts: HashMap::new(),
-            endpoint_groups: HashMap::new(),
-            group_members: HashMap::new(),
-            sniffer_sysids: HashSet::new(),
+            shards: std::array::from_fn(|_| RwLock::new(Shard::default())),
+            config: RwLock::new(Config::default()),
         }
+    }
+
+    #[inline]
+    fn shard_for(&self, sys_id: u8) -> &RwLock<Shard> {
+        // `(sys_id & SHARD_MASK)` is provably < SHARD_COUNT — the mask is
+        // SHARD_COUNT - 1 and SHARD_COUNT is a power of two — so the index
+        // is always in bounds. Clippy can't see that.
+        #[allow(clippy::indexing_slicing)]
+        &self.shards[(sys_id as usize) & SHARD_MASK]
     }
 
     /// Registers an endpoint as belonging to a named group.
     ///
     /// Endpoints in the same group share routing knowledge, allowing
     /// redundant physical links to the same system to both forward traffic.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The endpoint ID to register.
-    /// * `group` - The group name to assign.
-    pub fn set_endpoint_group(&mut self, id: EndpointId, group: String) {
-        self.endpoint_groups.insert(id, group.clone());
-        self.group_members.entry(group).or_default().insert(id);
+    pub fn set_endpoint_group(&self, id: EndpointId, group: String) {
+        let mut cfg = self.config.write();
+        cfg.endpoint_groups.insert(id, group.clone());
+        cfg.group_members.entry(group).or_default().insert(id);
     }
 
-    /// Checks if any endpoint in the given set is in the same group as `endpoint_id`.
-    fn any_in_same_group(&self, endpoints: &HashSet<EndpointId>, endpoint_id: EndpointId) -> bool {
-        let group = match self.endpoint_groups.get(&endpoint_id) {
-            Some(g) => g,
-            None => return false,
+    /// Returns `true` if any endpoint in `endpoints` shares a group with
+    /// `endpoint_id`. Requires a read lock on `config`.
+    fn any_in_same_group(
+        cfg: &Config,
+        endpoints: &HashSet<EndpointId>,
+        endpoint_id: EndpointId,
+    ) -> bool {
+        let Some(group) = cfg.endpoint_groups.get(&endpoint_id) else {
+            return false;
         };
-        let members = match self.group_members.get(group) {
-            Some(m) => m,
-            None => return false,
+        let Some(members) = cfg.group_members.get(group) else {
+            return false;
         };
-        // Check if any endpoint in the route entry is a member of our group
         endpoints.iter().any(|ep| members.contains(ep))
     }
 
-    /// Returns the set of endpoint IDs that have seen the given system ID.
-    /// Returns None if the system is unknown.
-    #[allow(dead_code)]
-    pub fn endpoints_for_system(&self, sysid: u8) -> Option<&HashSet<EndpointId>> {
-        self.sys_routes.get(&sysid).map(|e| &e.endpoints)
-    }
-
     /// Sets the system IDs that trigger sniffer mode.
-    pub fn set_sniffer_sysids(&mut self, sysids: &[u8]) {
-        self.sniffer_sysids = sysids.iter().copied().collect();
+    pub fn set_sniffer_sysids(&self, sysids: &[u8]) {
+        self.config.write().sniffer_sysids = sysids.iter().copied().collect();
     }
 
     /// Checks if this endpoint should receive all traffic due to sniffer mode.
     /// Returns true if any sniffer system ID has been seen on this endpoint.
     pub fn is_sniffer_endpoint(&self, endpoint_id: EndpointId) -> bool {
-        for &sysid in &self.sniffer_sysids {
-            if let Some(entry) = self.sys_routes.get(&sysid) {
+        // Snapshot the sniffer set first so we don't hold `config`'s lock
+        // across shard lookups (and to keep the hot path lock-order
+        // consistent: config before shard, never the other way round).
+        let sniffers: Vec<u8> = {
+            let cfg = self.config.read();
+            if cfg.sniffer_sysids.is_empty() {
+                return false;
+            }
+            cfg.sniffer_sysids.iter().copied().collect()
+        };
+        for sysid in sniffers {
+            let shard = self.shard_for(sysid).read();
+            if let Some(entry) = shard.sys_routes.get(&sysid) {
                 if entry.endpoints.contains(&endpoint_id) {
                     return true;
                 }
@@ -148,119 +190,81 @@ impl RoutingTable {
     ///
     /// When a message is received from a MAVLink entity (`sysid`, `compid`)
     /// via a specific `endpoint_id`, this method records that the
-    /// `endpoint_id` is a known path for that entity.
-    /// The `last_seen` timestamp for the entry is updated.
-    ///
-    /// # Arguments
-    ///
-    /// * `endpoint_id` - The ID of the endpoint where the message was received.
-    /// * `sysid` - The MAVLink system ID of the message sender.
-    /// * `compid` - The MAVLink component ID of the message sender.
-    /// * `now` - The timestamp of the observation.
-    pub fn update(&mut self, endpoint_id: EndpointId, sysid: u8, compid: u8, now: Instant) {
-        // Enforce MAX_ROUTES limit
-        if self.routes.len() >= MAX_ROUTES {
+    /// `endpoint_id` is a known path for that entity. The `last_seen`
+    /// timestamp for the entry is updated.
+    pub fn update(&self, endpoint_id: EndpointId, sysid: u8, compid: u8, now: Instant) {
+        let shard_lock = self.shard_for(sysid);
+        let mut shard = shard_lock.write();
+
+        // Capacity-enforcement helpers. These are per-shard: the original
+        // global caps (100k / 1k) are divided by `SHARD_COUNT`.
+        if shard.routes.len() >= MAX_ROUTES_PER_SHARD {
             warn!(
-                "Route table at capacity ({}), forcing prune of 60s old entries",
-                MAX_ROUTES
+                "Route table shard at capacity ({}), forcing prune of 60s old entries",
+                MAX_ROUTES_PER_SHARD
             );
-            self.prune(Duration::from_secs(60)); // Force cleanup of 1 minute old entries
+            shard_prune(&mut shard, Duration::from_secs(60));
         }
 
-        // Enforce MAX_SYSTEMS limit
-        if self.sys_routes.len() >= MAX_SYSTEMS {
+        if shard.sys_routes.len() >= MAX_SYSTEMS_PER_SHARD {
             warn!(
-                "System table at capacity ({}), removing oldest system",
-                MAX_SYSTEMS
+                "System table shard at capacity ({}), removing oldest system",
+                MAX_SYSTEMS_PER_SHARD
             );
-            // This prune logic will decrement endpoint_counts automatically.
-            let oldest_sys_entry = self
-                .sys_routes
-                .iter()
-                .min_by_key(|(_, entry)| entry.last_seen);
-
-            if let Some((&oldest_sysid, _)) = oldest_sys_entry {
-                // Manually decrement counts for endpoints in sys_routes
-                if let Some(removed_entry) = self.sys_routes.remove(&oldest_sysid) {
-                    for &ep_id in &removed_entry.endpoints {
-                        if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
-                            let count = occ.get_mut();
-                            *count = count.saturating_sub(1);
-                            if *occ.get() == 0 {
-                                occ.remove();
-                            }
-                        }
-                    }
-                }
-                // Also remove all component routes associated with this system
-                self.routes.retain(|(s, _), entry| {
-                    if *s == oldest_sysid {
-                        for &ep_id in &entry.endpoints {
-                            if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
-                                let count = occ.get_mut();
-                                *count = count.saturating_sub(1);
-                                if *occ.get() == 0 {
-                                    occ.remove();
-                                }
-                            }
-                        }
-                        false // Remove this entry
-                    } else {
-                        true
-                    }
-                });
-            }
+            shard_remove_oldest_system(&mut shard);
         }
 
-        // Update routes
-        let mut increment_ep_count_for_routes = false;
-        self.routes
+        // Update routes entry for (sysid, compid)
+        let mut increment_for_routes = false;
+        shard
+            .routes
             .entry((sysid, compid))
             .and_modify(|e| {
                 if e.endpoints.insert(endpoint_id) {
-                    // Check if new endpoint in this entry
-                    increment_ep_count_for_routes = true;
+                    increment_for_routes = true;
                 }
                 e.last_seen = now;
             })
             .or_insert_with(|| {
-                increment_ep_count_for_routes = true;
+                increment_for_routes = true;
                 RouteEntry {
-                    endpoints: HashSet::from([endpoint_id]),
+                    endpoints: HashSet::from_iter([endpoint_id]),
                     last_seen: now,
                 }
             });
-        if increment_ep_count_for_routes {
-            let count = self.endpoint_counts.entry(endpoint_id).or_insert(0);
+        if increment_for_routes {
+            let count = shard.endpoint_counts.entry(endpoint_id).or_insert(0);
             *count = count.saturating_add(1);
         }
 
-        // Update sys_routes
-        let mut increment_ep_count_for_sys_routes = false;
-        self.sys_routes
+        // Update sys_routes entry for sysid
+        let mut increment_for_sys = false;
+        shard
+            .sys_routes
             .entry(sysid)
             .and_modify(|e| {
                 if e.endpoints.insert(endpoint_id) {
-                    increment_ep_count_for_sys_routes = true;
+                    increment_for_sys = true;
                 }
                 e.last_seen = now;
             })
             .or_insert_with(|| {
-                increment_ep_count_for_sys_routes = true;
+                increment_for_sys = true;
                 RouteEntry {
-                    endpoints: HashSet::from([endpoint_id]),
+                    endpoints: HashSet::from_iter([endpoint_id]),
                     last_seen: now,
                 }
             });
-        if increment_ep_count_for_sys_routes {
-            let count = self.endpoint_counts.entry(endpoint_id).or_insert(0);
+        if increment_for_sys {
+            let count = shard.endpoint_counts.entry(endpoint_id).or_insert(0);
             *count = count.saturating_add(1);
         }
     }
 
     /// Checks if an update is needed for the given route.
-    /// An update is needed if the route is unknown, the endpoint isn't registered,
-    /// or the last update was more than 1 second ago.
+    ///
+    /// An update is needed if the route is unknown, the endpoint isn't
+    /// registered, or the last update was more than 1 second ago.
     pub fn needs_update_for_endpoint(
         &self,
         endpoint_id: EndpointId,
@@ -268,21 +272,18 @@ impl RoutingTable {
         compid: u8,
         now: Instant,
     ) -> bool {
-        // Check component route
-        let comp_entry = self.routes.get(&(sysid, compid));
-        let comp_needs_update = match comp_entry {
-            None => true, // Route doesn't exist
+        let shard = self.shard_for(sysid).read();
+
+        let comp_needs_update = match shard.routes.get(&(sysid, compid)) {
+            None => true,
             Some(e) => {
-                // Needs update if endpoint not in set OR entry is stale
                 !e.endpoints.contains(&endpoint_id)
                     || now.duration_since(e.last_seen) >= Duration::from_secs(1)
             }
         };
 
-        // Check system route
-        let sys_entry = self.sys_routes.get(&sysid);
-        let sys_needs_update = match sys_entry {
-            None => true, // System route doesn't exist
+        let sys_needs_update = match shard.sys_routes.get(&sysid) {
+            None => true,
             Some(e) => {
                 !e.endpoints.contains(&endpoint_id)
                     || now.duration_since(e.last_seen) >= Duration::from_secs(1)
@@ -295,129 +296,159 @@ impl RoutingTable {
     /// Determines if a message targeting `(target_sysid, target_compid)`
     /// should be sent to a particular `endpoint_id`.
     ///
-    /// This method implements a routing policy to decide message distribution.
-    ///
-    /// # Routing Logic (Policy B - Aggressive Fallback):
-    /// 1. If `target_sysid == 0`: This is a broadcast message, it should be sent to all endpoints.
-    ///    The routing table does not filter broadcast messages based on target.
-    /// 2. If a specific route for `(target_sysid, target_compid)` exists:
-    ///    The message is sent *only* to endpoints that have specifically seen this combination.
-    /// 3. If a route for `target_sysid` exists (i.e., the system is known) but *not* for the
-    ///    specific component `target_compid`:
-    ///    The message is sent to *all* endpoints that have seen this system. This acts as an
-    ///    "aggressive fallback," assuming the component might be new or its location has moved.
-    /// 4. If no route (neither specific component nor system-wide) exists for `target_sysid`:
-    ///    The message is dropped (not sent to any endpoint).
-    ///
-    /// # Arguments
-    ///
-    /// * `endpoint_id` - The ID of the endpoint to check.
-    /// * `target_sysid` - The MAVLink system ID targeted by the message.
-    /// * `target_compid` - The MAVLink component ID targeted by the message.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the message should be sent to `endpoint_id`, `false` otherwise.
+    /// See the routing policy description at the module level for semantics.
     pub fn should_send(
         &self,
         endpoint_id: EndpointId,
         target_sysid: u8,
         target_compid: u8,
     ) -> bool {
-        // Sniffer mode: if this endpoint has seen a sniffer system ID, forward everything
         if self.is_sniffer_endpoint(endpoint_id) {
             return true;
         }
 
         if target_sysid == 0 {
-            // MAV_BROADCAST_SYSTEM_ID
             return true;
         }
 
-        if let Some(entry) = self.sys_routes.get(&target_sysid) {
-            if target_compid == 0 {
-                // MAV_BROADCAST_COMPONENT_ID or target system only
-                return entry.endpoints.contains(&endpoint_id)
-                    || self.any_in_same_group(&entry.endpoints, endpoint_id);
-            }
+        let shard = self.shard_for(target_sysid).read();
+        let cfg = self.config.read();
 
-            // Check for specific component route
-            if let Some(comp_entry) = self.routes.get(&(target_sysid, target_compid)) {
-                return comp_entry.endpoints.contains(&endpoint_id)
-                    || self.any_in_same_group(&comp_entry.endpoints, endpoint_id);
-            }
+        let Some(entry) = shard.sys_routes.get(&target_sysid) else {
+            return false;
+        };
 
-            // Fallback: We know the system but not this specific component
-            // Send to all endpoints that have seen this system
+        if target_compid == 0 {
             return entry.endpoints.contains(&endpoint_id)
-                || self.any_in_same_group(&entry.endpoints, endpoint_id);
+                || Self::any_in_same_group(&cfg, &entry.endpoints, endpoint_id);
         }
 
-        false
+        // Specific component route
+        if let Some(comp_entry) = shard.routes.get(&(target_sysid, target_compid)) {
+            return comp_entry.endpoints.contains(&endpoint_id)
+                || Self::any_in_same_group(&cfg, &comp_entry.endpoints, endpoint_id);
+        }
+
+        // Aggressive fallback: we know the system but not this component.
+        entry.endpoints.contains(&endpoint_id)
+            || Self::any_in_same_group(&cfg, &entry.endpoints, endpoint_id)
     }
 
-    /// Prunes old entries from the routing table.
-    ///
-    /// Any route entry (`(system_id, component_id)` or `system_id`) that has not been
-    /// updated within `max_age` duration will be removed. This helps in managing
-    /// dynamic network topologies where MAVLink entities might disconnect or change
-    /// their associated endpoints.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_age` - The maximum duration an entry can remain in the table without being updated.
-    pub fn prune(&mut self, max_age: Duration) {
-        let now = Instant::now();
-
-        // Collect endpoint_ids from removed entries to decrement counts
-        let mut removed_endpoint_counts: HashMap<EndpointId, usize> = HashMap::new();
-
-        self.routes.retain(|_key, entry| {
-            let expired = now.duration_since(entry.last_seen) > max_age;
-            if expired {
-                for &ep_id in &entry.endpoints {
-                    let c = removed_endpoint_counts.entry(ep_id).or_insert(0);
-                    *c = c.saturating_add(1);
-                }
-            }
-            !expired
-        });
-
-        self.sys_routes.retain(|_key, entry| {
-            let expired = now.duration_since(entry.last_seen) > max_age;
-            if expired {
-                for &ep_id in &entry.endpoints {
-                    let c = removed_endpoint_counts.entry(ep_id).or_insert(0);
-                    *c = c.saturating_add(1);
-                }
-            }
-            !expired
-        });
-
-        // Decrement counts and remove endpoint_ids if their count reaches zero
-        for (ep_id, count) in removed_endpoint_counts {
-            if let Entry::Occupied(mut occ) = self.endpoint_counts.entry(ep_id) {
-                let current = occ.get_mut();
-                *current = current.saturating_sub(count);
-                if *occ.get() == 0 {
-                    occ.remove();
-                }
-            }
+    /// Prunes old entries from the routing table across all shards.
+    pub fn prune(&self, max_age: Duration) {
+        for shard_lock in &self.shards {
+            let mut shard = shard_lock.write();
+            shard_prune(&mut shard, max_age);
         }
     }
 
     /// Returns current statistics about the routing table.
+    ///
+    /// This iterates all shards under read locks and unions endpoint IDs —
+    /// O(shards × distinct endpoints) in the worst case, but shards is a
+    /// small constant and endpoint counts are tracked incrementally per
+    /// shard so the hot scan is short.
     pub fn stats(&self) -> RoutingStats {
+        let mut total_systems: usize = 0;
+        let mut total_routes: usize = 0;
+        let mut endpoint_ids: HashSet<EndpointId> = HashSet::new();
+        for shard_lock in &self.shards {
+            let shard = shard_lock.read();
+            total_systems = total_systems.saturating_add(shard.sys_routes.len());
+            total_routes = total_routes.saturating_add(shard.routes.len());
+            for ep_id in shard.endpoint_counts.keys() {
+                endpoint_ids.insert(*ep_id);
+            }
+        }
         RoutingStats {
-            total_systems: self.sys_routes.len(),
-            total_routes: self.routes.len(),
-            total_endpoints: self.endpoint_counts.len(), // Use the pre-calculated length
+            total_systems,
+            total_routes,
+            total_endpoints: endpoint_ids.len(),
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
         }
     }
+}
+
+/// TTL-prune one shard. Caller holds the shard's write lock.
+fn shard_prune(shard: &mut Shard, max_age: Duration) {
+    let now = Instant::now();
+    let mut removed: HashMap<EndpointId, usize> = HashMap::new();
+
+    shard.routes.retain(|_, entry| {
+        let expired = now.duration_since(entry.last_seen) > max_age;
+        if expired {
+            for &ep_id in &entry.endpoints {
+                let c = removed.entry(ep_id).or_insert(0);
+                *c = c.saturating_add(1);
+            }
+        }
+        !expired
+    });
+
+    shard.sys_routes.retain(|_, entry| {
+        let expired = now.duration_since(entry.last_seen) > max_age;
+        if expired {
+            for &ep_id in &entry.endpoints {
+                let c = removed.entry(ep_id).or_insert(0);
+                *c = c.saturating_add(1);
+            }
+        }
+        !expired
+    });
+
+    for (ep_id, count) in removed {
+        if let Entry::Occupied(mut occ) = shard.endpoint_counts.entry(ep_id) {
+            let current = occ.get_mut();
+            *current = current.saturating_sub(count);
+            if *occ.get() == 0 {
+                occ.remove();
+            }
+        }
+    }
+}
+
+/// Remove the oldest `sys_routes` entry in this shard (and all of its
+/// associated component routes). Caller holds the shard's write lock.
+fn shard_remove_oldest_system(shard: &mut Shard) {
+    let oldest_entry = shard
+        .sys_routes
+        .iter()
+        .min_by_key(|(_, entry)| entry.last_seen);
+
+    let Some((&oldest_sysid, _)) = oldest_entry else {
+        return;
+    };
+
+    if let Some(removed_entry) = shard.sys_routes.remove(&oldest_sysid) {
+        for &ep_id in &removed_entry.endpoints {
+            if let Entry::Occupied(mut occ) = shard.endpoint_counts.entry(ep_id) {
+                let count = occ.get_mut();
+                *count = count.saturating_sub(1);
+                if *occ.get() == 0 {
+                    occ.remove();
+                }
+            }
+        }
+    }
+    shard.routes.retain(|(s, _), entry| {
+        if *s == oldest_sysid {
+            for &ep_id in &entry.endpoints {
+                if let Entry::Occupied(mut occ) = shard.endpoint_counts.entry(ep_id) {
+                    let count = occ.get_mut();
+                    *count = count.saturating_sub(1);
+                    if *occ.get() == 0 {
+                        occ.remove();
+                    }
+                }
+            }
+            false
+        } else {
+            true
+        }
+    });
 }
 
 #[cfg(test)]

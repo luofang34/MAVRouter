@@ -14,7 +14,6 @@ use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,7 +66,7 @@ pub async fn run(
     mode: crate::config::EndpointMode,
     bus_tx: broadcast::Sender<Arc<RoutedMessage>>,
     bus_rx: broadcast::Receiver<Arc<RoutedMessage>>,
-    routing_table: Arc<RwLock<RoutingTable>>,
+    routing_table: Arc<RoutingTable>,
     route_update_tx: tokio::sync::mpsc::Sender<crate::routing::RouteUpdate>,
     dedup: ConcurrentDedup,
     filters: EndpointFilters,

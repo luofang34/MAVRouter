@@ -12,7 +12,6 @@ use crate::mavlink_utils::extract_target;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::{RouteUpdate, RoutingTable};
 use mavlink::Message;
-use parking_lot::RwLock;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -177,7 +176,7 @@ pub struct EndpointCore {
     /// The hot path only takes *read* locks here. All writes go through
     /// [`EndpointCore::route_update_tx`] so the async ingress loop never
     /// blocks a tokio worker on a contended write lock.
-    pub routing_table: Arc<RwLock<RoutingTable>>,
+    pub routing_table: Arc<RoutingTable>,
     /// Channel to the routing updater task. The hot path submits
     /// [`RouteUpdate`]s here with `try_send`; the updater task batches them
     /// and applies them under the write lock on its own.
@@ -258,7 +257,7 @@ impl EndpointCore {
 
             // Cheap read first; only take write lock when an update is actually needed
             let needs_update = {
-                let rt = self.routing_table.read();
+                let rt = self.routing_table.as_ref();
                 rt.needs_update_for_endpoint(
                     self.id,
                     frame.header.system_id,
@@ -365,7 +364,7 @@ impl EndpointCore {
             return true;
         }
 
-        let rt = self.routing_table.read();
+        let rt = self.routing_table.as_ref();
         let should_send = rt.should_send(self.id, target.system_id, target.component_id);
 
         if !should_send {

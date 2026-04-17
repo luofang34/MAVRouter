@@ -11,7 +11,6 @@ use crate::error::{Result, RouterError};
 use crate::filter::EndpointFilters;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
-use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio_serial::SerialPortBuilderExt;
@@ -58,7 +57,7 @@ pub async fn run(
     flow_control: tokio_serial::FlowControl,
     bus_tx: broadcast::Sender<Arc<RoutedMessage>>,
     bus_rx: broadcast::Receiver<Arc<RoutedMessage>>,
-    routing_table: Arc<RwLock<RoutingTable>>,
+    routing_table: Arc<RoutingTable>,
     route_update_tx: tokio::sync::mpsc::Sender<crate::routing::RouteUpdate>,
     dedup: ConcurrentDedup,
     filters: EndpointFilters,
