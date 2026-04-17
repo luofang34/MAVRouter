@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use mavlink::{MavHeader, MavlinkVersion};
 use std::fmt;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use crate::mavlink_utils::MessageTarget;
@@ -17,8 +18,10 @@ impl fmt::Display for EndpointId {
 
 /// A routed MAVLink message with source information.
 ///
-/// Optimized for zero-copy forwarding: contains raw bytes and cached metadata
-/// instead of the parsed message to avoid heap allocation and Arc overhead.
+/// Travels through the bus as `Arc<RoutedMessage>` so fan-out cost is one
+/// atomic refcount bump per subscriber instead of a full struct clone
+/// (which includes heap-backed `Bytes` — cheap to clone on its own, but
+/// adds up across many subscribers).
 #[derive(Clone, Debug)]
 pub struct RoutedMessage {
     /// Identifier of the source endpoint that received this message.
@@ -38,25 +41,27 @@ pub struct RoutedMessage {
     pub target: MessageTarget,
 }
 
-/// Message bus handle used to distribute `RoutedMessage`s
-/// to all active endpoints and internal router components.
+/// Message bus handle used to distribute `Arc<RoutedMessage>`s to all active
+/// endpoints and internal router components.
 ///
-/// Uses `tokio::sync::broadcast` for lock-free message distribution.
-/// New subscribers are created via `sender.subscribe()` (not receiver clone).
+/// Uses `tokio::sync::broadcast` for lock-free message distribution. New
+/// subscribers are created via `sender.subscribe()` (not receiver clone).
+/// Carrying `Arc<RoutedMessage>` keeps fan-out O(1) per subscriber — each
+/// receiver pays an atomic increment, not a `RoutedMessage` clone.
 #[derive(Clone)]
 pub struct MessageBus {
     /// Sender half of the bus. Also used to create new subscribers via `subscribe()`.
-    pub tx: broadcast::Sender<RoutedMessage>,
+    pub tx: broadcast::Sender<Arc<RoutedMessage>>,
 }
 
 impl MessageBus {
     /// Create a new subscriber to the bus.
-    pub fn subscribe(&self) -> broadcast::Receiver<RoutedMessage> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<RoutedMessage>> {
         self.tx.subscribe()
     }
 
     /// Clone the sender half of the bus.
-    pub fn sender(&self) -> broadcast::Sender<RoutedMessage> {
+    pub fn sender(&self) -> broadcast::Sender<Arc<RoutedMessage>> {
         self.tx.clone()
     }
 }
@@ -93,13 +98,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_bus_filtering() {
-        let bus = create_bus(1000); // Use a default capacity for test
+        let bus = create_bus(1000);
         let mut rx = bus.subscribe();
 
-        let msg = RoutedMessage {
+        let msg = Arc::new(RoutedMessage {
             source_id: EndpointId(1),
             header: MavHeader::default(),
-            message_id: 0, // HEARTBEAT message ID
+            message_id: 0,
             version: MavlinkVersion::V2,
             timestamp_us: 0,
             serialized_bytes: Bytes::new(),
@@ -107,10 +112,10 @@ mod tests {
                 system_id: 0,
                 component_id: 0,
             },
-        };
+        });
 
         bus.tx
-            .send(msg.clone())
+            .send(Arc::clone(&msg))
             .expect("Failed to send test message");
 
         let received = rx.recv().await.expect("Failed to receive test message");
@@ -125,7 +130,7 @@ mod tests {
         let tx = bus.sender();
 
         for i in 0..100 {
-            let msg = RoutedMessage {
+            let msg = Arc::new(RoutedMessage {
                 source_id: EndpointId(0),
                 header: MavHeader {
                     system_id: 1,
@@ -140,7 +145,7 @@ mod tests {
                     system_id: 0,
                     component_id: 0,
                 },
-            };
+            });
             tx.send(msg).ok();
         }
         // Reaching here without panic is the assertion.
