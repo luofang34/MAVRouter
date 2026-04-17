@@ -11,7 +11,6 @@ use crate::endpoint_core::EndpointStats;
 use crate::filter::EndpointFilters;
 use crate::router::{create_bus, EndpointId, MessageBus};
 use crate::routing::{RouteUpdate, RoutingTable};
-use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,7 +64,7 @@ pub struct OrchestratedRouter {
     /// The message bus for inter-endpoint communication.
     pub bus: MessageBus,
     /// Shared routing table.
-    pub routing_table: Arc<RwLock<RoutingTable>>,
+    pub routing_table: Arc<RoutingTable>,
     /// Per-endpoint statistics: (EndpointId, name, stats).
     pub endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,
 }
@@ -80,7 +79,7 @@ pub struct OrchestratedRouter {
 /// - All configured endpoints (UDP, TCP, Serial) with supervisors
 pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> OrchestratedRouter {
     let bus = create_bus(config.general.bus_capacity);
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
 
     // Register endpoint groups for redundant link support
     for (i, endpoint_config) in config.endpoint.iter().enumerate() {
@@ -94,7 +93,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
         rt.set_sniffer_sysids(&config.general.sniffer_sysids);
     }
 
-    let routing_table = Arc::new(RwLock::new(rt));
+    let routing_table = Arc::new(rt);
     let mut tasks: Vec<NamedTask> = Vec::new();
     let mut endpoint_stats: Vec<(EndpointId, String, Arc<EndpointStats>)> = Vec::new();
 
@@ -131,7 +130,7 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
     // Spawn the single routing updater task. It owns *all* writes to the
     // routing table: streamed route observations submitted by endpoints via
     // the `route_update_tx` channel, and periodic prune cycles. This is the
-    // only code path in the crate that holds `routing_table.write()` — the
+    // only code path in the crate that holds `routing_table.as_ref()` — the
     // ingress hot path is strictly non-blocking.
     let (route_update_tx, route_update_rx) =
         mpsc::channel::<RouteUpdate>(ROUTE_UPDATE_QUEUE_CAPACITY);

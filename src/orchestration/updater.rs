@@ -1,10 +1,12 @@
-//! The routing-table updater task: drains `RouteUpdate`s from an mpsc
-//! channel and applies them under the single `routing_table.write()`
-//! lock held anywhere in the crate.
+//! The routing-table updater task.
+//!
+//! Drains `RouteUpdate`s from an mpsc channel and applies them to the
+//! sharded `RoutingTable`. Each `update()` and `prune()` call takes the
+//! matching shard's `RwLock` internally; batching is still useful to
+//! amortise channel wake-ups, but no outer table-wide lock exists.
 
 use super::{NamedTask, ROUTE_UPDATE_BATCH_SIZE};
 use crate::routing::{RouteUpdate, RoutingTable};
-use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -13,17 +15,15 @@ use tracing::{debug, info};
 
 /// Spawn the single routing-table updater task.
 ///
-/// This is the *only* code path in the crate that acquires
-/// `routing_table.write()`. It drains the route-update mpsc channel in
-/// batches (up to `ROUTE_UPDATE_BATCH_SIZE` per write-lock acquisition)
-/// and also drives periodic prune cycles from the same task — meaning
-/// readers only ever contend with this one updater, and there is no
-/// scenario where an async hot path holds a blocking write lock.
+/// Batches of `RouteUpdate`s are drained from the mpsc and applied via
+/// `RoutingTable::update`; periodic prunes run from the same task through
+/// `RoutingTable::prune`. The routing table is internally sharded, so
+/// writes to one shard don't stall readers on the other shards.
 ///
 /// The task exits on cancellation or when all update senders have been
 /// dropped (e.g. all endpoints have finished during shutdown).
 pub fn spawn_routing_updater(
-    routing_table: Arc<RwLock<RoutingTable>>,
+    routing_table: Arc<RoutingTable>,
     mut update_rx: mpsc::Receiver<RouteUpdate>,
     prune_ttl: Duration,
     prune_interval: Duration,
@@ -51,24 +51,20 @@ pub fn spawn_routing_updater(
                     };
                     batch.clear();
                     batch.push(first);
-                    // Opportunistically drain more queued updates so we amortise
-                    // the write-lock acquisition across many observations.
+                    // Opportunistically drain more queued updates so we
+                    // amortise the mpsc wake-up cost across many observations.
                     while batch.len() < ROUTE_UPDATE_BATCH_SIZE {
                         match update_rx.try_recv() {
                             Ok(u) => batch.push(u),
                             Err(_) => break,
                         }
                     }
-                    let mut guard = routing_table.write();
                     for u in batch.iter() {
-                        guard.update(u.endpoint_id, u.sys_id, u.comp_id, u.now);
+                        routing_table.update(u.endpoint_id, u.sys_id, u.comp_id, u.now);
                     }
-                    drop(guard);
                 }
                 _ = prune_timer.tick() => {
-                    let mut guard = routing_table.write();
-                    guard.prune(prune_ttl);
-                    drop(guard);
+                    routing_table.prune(prune_ttl);
                 }
             }
         }

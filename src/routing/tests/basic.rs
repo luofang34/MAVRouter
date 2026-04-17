@@ -12,7 +12,6 @@
 
 use crate::router::EndpointId;
 use crate::routing::*;
-use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -23,7 +22,7 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn test_basic_routing() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
 
     assert!(!rt.should_send(EndpointId(0), 1, 1));
@@ -41,7 +40,7 @@ fn test_basic_routing() {
 
 #[test]
 fn test_component_broadcast_routing() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
 
     rt.update(EndpointId(0), 1, 1, now);
@@ -56,7 +55,7 @@ fn test_component_broadcast_routing() {
 
 #[test]
 fn test_routing_component_fallback() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
 
     rt.update(EndpointId(0), 1, 1, now);
@@ -71,7 +70,7 @@ fn test_routing_component_fallback() {
 
 #[test]
 fn test_multi_system_endpoint() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
 
     rt.update(EndpointId(0), 1, 1, now);
@@ -89,7 +88,7 @@ fn test_multi_system_endpoint() {
 
 #[test]
 fn test_broadcast_combinations() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
 
     rt.update(EndpointId(0), 1, 1, now);
@@ -117,7 +116,7 @@ fn test_broadcast_combinations() {
 
 #[test]
 fn test_routing_table_capacity_limit() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
 
     // MAX_ROUTES = 100_000, MAX_SYSTEMS = 1_000, but u8 sysid/compid means
@@ -135,7 +134,7 @@ fn test_routing_table_capacity_limit() {
 
 #[test]
 fn test_routing_table_churn_stability() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
 
     let iterations = 100_000usize;
     let prune_interval = 10_000usize;
@@ -161,7 +160,7 @@ fn test_routing_table_churn_stability() {
 
 #[test]
 fn test_route_ttl_pruning() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
 
     let old_time = Instant::now();
     rt.update(EndpointId(0), 1, 1, old_time);
@@ -182,7 +181,7 @@ fn test_route_ttl_pruning() {
 
 #[test]
 fn test_concurrent_updates_high_load() {
-    let rt = Arc::new(RwLock::new(RoutingTable::new()));
+    let rt = Arc::new(RoutingTable::new());
     let mut handles = vec![];
 
     // 20 writers
@@ -192,10 +191,8 @@ fn test_concurrent_updates_high_load() {
             for j in 0..1000 {
                 let sys = ((j % 50) + 1) as u8;
                 let comp = ((j % 20) + 1) as u8;
-                let mut lock = rt_clone.write();
-                lock.update(EndpointId(i), sys, comp, Instant::now());
+                rt_clone.update(EndpointId(i), sys, comp, Instant::now());
                 if j % 100 == 0 {
-                    drop(lock);
                     thread::sleep(Duration::from_micros(10));
                 }
             }
@@ -209,10 +206,8 @@ fn test_concurrent_updates_high_load() {
             for j in 0..1000 {
                 let sys = ((j % 50) + 1) as u8;
                 let comp = ((j % 20) + 1) as u8;
-                let lock = rt_clone.read();
-                let _ = lock.should_send(EndpointId(i), sys, comp);
+                let _ = rt_clone.should_send(EndpointId(i), sys, comp);
                 if j % 100 == 0 {
-                    drop(lock);
                     thread::sleep(Duration::from_micros(10));
                 }
             }
@@ -224,8 +219,7 @@ fn test_concurrent_updates_high_load() {
     handles.push(thread::spawn(move || {
         for _ in 0..10 {
             thread::sleep(Duration::from_millis(5));
-            let mut lock = rt_clone.write();
-            lock.prune(Duration::from_millis(100));
+            rt_clone.prune(Duration::from_millis(100));
         }
     }));
 
@@ -237,7 +231,7 @@ fn test_concurrent_updates_high_load() {
 
 #[tokio::test]
 async fn test_async_concurrent_access() {
-    let rt = Arc::new(RwLock::new(RoutingTable::new()));
+    let rt = Arc::new(RoutingTable::new());
 
     let mut handles = vec![];
 
@@ -245,8 +239,7 @@ async fn test_async_concurrent_access() {
         let rt_clone = rt.clone();
         handles.push(tokio::spawn(async move {
             for j in 0..100 {
-                let mut rt_lock = rt_clone.write();
-                rt_lock.update(EndpointId(i), (j % 255) as u8, 1, Instant::now());
+                rt_clone.update(EndpointId(i), (j % 255) as u8, 1, Instant::now());
             }
         }));
     }
@@ -255,8 +248,7 @@ async fn test_async_concurrent_access() {
         let rt_clone = rt.clone();
         handles.push(tokio::spawn(async move {
             for j in 0..100 {
-                let rt_lock = rt_clone.read();
-                let _ = rt_lock.should_send(EndpointId(0), (j % 255) as u8, 1);
+                let _ = rt_clone.should_send(EndpointId(0), (j % 255) as u8, 1);
             }
         }));
     }
@@ -283,7 +275,7 @@ fn test_endpoint_id_wrap_behavior() {
     assert_eq!(ids[5].0, usize::MAX);
     assert_eq!(ids[6].0, 0, "Counter wraps to 0 after usize::MAX");
 
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
     for id in &ids {
         rt.update(*id, 1, 1, now);
@@ -300,7 +292,7 @@ fn test_tcp_endpoint_id_collision_scenario() {
     // occurs when endpoint0's counter reaches 1000 and meets endpoint1's
     // first client. Verify routing is merely "see traffic from both
     // systems" — not wrong, just extra matches.
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
 
     for i in 0..1001usize {
@@ -315,7 +307,7 @@ fn test_tcp_endpoint_id_collision_scenario() {
 
 #[test]
 fn test_max_header_values() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
 
     rt.update(EndpointId(usize::MAX), 255, 255, now);
@@ -332,7 +324,7 @@ fn test_max_header_values() {
 
 #[test]
 fn test_needs_update_logic() {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
     let now = Instant::now();
 
     assert!(rt.needs_update_for_endpoint(EndpointId(0), 1, 1, now));

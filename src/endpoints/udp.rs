@@ -27,7 +27,7 @@ use dashmap::DashMap;
 use tokio::sync::broadcast::{self, error::RecvError};
 // futures::join_all removed - sequential sends avoid Vec allocation (issue #17)
 use mavlink::MavlinkVersion;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::sync::atomic::Ordering;
@@ -104,7 +104,7 @@ pub async fn run(
     mode: crate::config::EndpointMode,
     bus_tx: broadcast::Sender<Arc<RoutedMessage>>,
     bus_rx: broadcast::Receiver<Arc<RoutedMessage>>,
-    routing_table: Arc<RwLock<RoutingTable>>,
+    routing_table: Arc<RoutingTable>,
     route_update_tx: tokio::sync::mpsc::Sender<crate::routing::RouteUpdate>,
     dedup: ConcurrentDedup,
     filters: EndpointFilters,

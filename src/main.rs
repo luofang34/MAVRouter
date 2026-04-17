@@ -197,9 +197,7 @@ async fn main() -> Result<()> {
                             break;
                         }
                         _ = tokio::time::sleep(Duration::from_secs(sample_interval)) => {
-                            let rt = rt_stats.read();
-                            let mut stats = rt.stats();
-                            drop(rt); // Release lock quickly
+                            let mut stats = rt_stats.stats();
                             // Ensure timestamp reflects sample time
                             stats.timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
                                 Ok(d) => d.as_secs(),

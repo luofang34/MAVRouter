@@ -11,7 +11,7 @@ use mavrouter::routing::RoutingTable;
 use std::time::{Duration, Instant}; // Explicit import
 
 fn benchmark_routing_table_lookup(c: &mut Criterion) {
-    let mut rt = RoutingTable::new();
+    let rt = RoutingTable::new();
 
     // Populate with realistic data: 10 systems, 5 components each
     for sys in 1..=10 {
@@ -61,7 +61,7 @@ fn benchmark_target_extraction(c: &mut Criterion) {
 
 fn benchmark_routing_table_update(c: &mut Criterion) {
     c.bench_function("routing_update", |b| {
-        let mut rt = RoutingTable::new();
+        let rt = RoutingTable::new();
         let mut counter = 0u8;
         b.iter(|| {
             counter = counter.wrapping_add(1);
@@ -74,7 +74,7 @@ fn benchmark_routing_table_prune(c: &mut Criterion) {
     let mut group = c.benchmark_group("routing_prune");
 
     for size in [10, 100, 1000].iter() {
-        let mut rt = RoutingTable::new();
+        let rt = RoutingTable::new();
         for i in 0..*size {
             rt.update(EndpointId(1), (i % 255) as u8, 1, Instant::now());
         }
