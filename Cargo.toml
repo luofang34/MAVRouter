@@ -45,6 +45,9 @@ serial_test = "3.0"
 criterion = "0.5"
 num_cpus = "1.16"
 tempfile = "3.10"
+# `test-util` is required for `#[tokio::test(start_paused = true)]` in unit
+# tests that assert timeout behaviour without burning real wall-clock time.
+tokio = { version = "1.36", features = ["test-util"] }
 # `no-env-filter` is required for integration tests — otherwise tracing-test
 # defaults to filtering by the test crate name and drops logs emitted from
 # inside `mavrouter::*`, which is exactly what `shutdown_test.rs` asserts on.
