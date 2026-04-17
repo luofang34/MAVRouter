@@ -37,6 +37,20 @@ pub enum RouterError {
         source: tokio_serial::Error,
     },
 
+    /// Serial port open exceeded the configured timeout.
+    ///
+    /// Distinct from [`Self::Serial`] so logs and callers can tell
+    /// "device responded with an error" apart from "device never
+    /// responded at all" (driver wedged, USB adapter disconnected
+    /// mid-enumeration, etc.).
+    #[error("Serial port open on '{device}' timed out after {timeout_secs}s")]
+    SerialTimeout {
+        /// Path to the serial device
+        device: String,
+        /// The timeout that elapsed, in whole seconds
+        timeout_secs: u64,
+    },
+
     /// File system errors (log file creation, stats socket)
     #[error("Filesystem error at '{path}': {source}")]
     Filesystem {
@@ -73,6 +87,14 @@ impl RouterError {
         }
     }
 
+    /// Create a new serial-open timeout error
+    pub fn serial_timeout(device: impl Into<String>, timeout_secs: u64) -> Self {
+        Self::SerialTimeout {
+            device: device.into(),
+            timeout_secs,
+        }
+    }
+
     /// Create a new filesystem error
     pub fn filesystem(path: impl Into<String>, source: io::Error) -> Self {
         Self::Filesystem {
@@ -104,6 +126,20 @@ mod tests {
         let err = RouterError::network("127.0.0.1:5760", io_err);
         assert!(matches!(err, RouterError::Network { .. }));
         assert!(err.to_string().contains("127.0.0.1:5760"));
+    }
+
+    #[test]
+    fn test_serial_timeout_error_creation() {
+        let err = RouterError::serial_timeout("/dev/ttyUSB0", 3);
+        assert!(matches!(
+            err,
+            RouterError::SerialTimeout {
+                ref device,
+                timeout_secs: 3,
+            } if device == "/dev/ttyUSB0"
+        ));
+        assert!(err.to_string().contains("/dev/ttyUSB0"));
+        assert!(err.to_string().contains("3s"));
     }
 
     #[test]
