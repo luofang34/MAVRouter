@@ -2,7 +2,6 @@
 #![allow(clippy::cast_sign_loss)]
 #![allow(clippy::arithmetic_side_effects)]
 #![allow(clippy::expect_used)]
-#![allow(clippy::let_underscore_must_use)]
 
 //! Bus fan-out benchmark.
 //!
@@ -96,7 +95,13 @@ fn bench_bus_fanout(c: &mut Criterion) {
                                 // Arc::clone is the cost every subscriber
                                 // pays — that's the point of the Arc
                                 // migration.
-                                let _ = bus.tx.send(Arc::clone(&msg));
+                                //
+                                // `.ok()` — broadcast::send returns Err when
+                                // all receivers are gone, which is expected
+                                // while the receiver tasks are still catching
+                                // up to close. The bench measures total send
+                                // throughput, so every send counts regardless.
+                                bus.tx.send(Arc::clone(&msg)).ok();
                             }
                         }
                         let elapsed = start.elapsed();
@@ -105,7 +110,11 @@ fn bench_bus_fanout(c: &mut Criterion) {
                         // exit; otherwise they'd wait forever.
                         drop(bus);
                         for h in handles {
-                            let _ = h.await;
+                            // `.ok()` — a subscriber task panicking would be a
+                            // real bug, but at teardown we've already recorded
+                            // the elapsed time and just want to join. Any
+                            // JoinError here doesn't affect the measurement.
+                            h.await.ok();
                         }
                         black_box(elapsed)
                     })
