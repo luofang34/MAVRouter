@@ -132,9 +132,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Graceful shutdown with log integrity.
 - Comprehensive test suite and performance benchmarks.
 
-[Unreleased]: https://github.com/luofang34/MAVRouter/compare/v0.1.5...HEAD
-[0.1.5]: https://github.com/luofang34/MAVRouter/compare/v0.1.4...v0.1.5
-[0.1.4]: https://github.com/luofang34/MAVRouter/compare/v0.1.3...v0.1.4
-[0.1.3]: https://github.com/luofang34/MAVRouter/compare/v0.1.1...v0.1.3
-[0.1.1]: https://github.com/luofang34/MAVRouter/releases/tag/v0.1.1
-[0.1.0]: https://github.com/luofang34/MAVRouter/releases/tag/v0.1.0
+<!--
+Version-to-URL reference links are intentionally omitted: only `v0.1.5` was
+ever pushed as a git tag. Once the other releases are retroactively tagged
+(or dropped), `Unreleased`/`0.1.5`/etc. can be wired up as `[X.Y.Z]:` refs
+per Keep a Changelog.
+-->
+
