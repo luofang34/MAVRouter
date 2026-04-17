@@ -241,8 +241,6 @@ impl EndpointCore {
         }
 
         // 2. Use raw bytes from parser (zero-copy, no re-serialization needed)
-        // MAVLink frames are max 280 bytes, always fits u64
-        #[allow(clippy::cast_possible_truncation)]
         let raw_len = frame.raw_bytes.len() as u64;
         let serialized_bytes = frame.raw_bytes;
 
