@@ -1,13 +1,9 @@
 //! # mavrouter
 //!
-//! High-performance, intelligent MAVLink router for embedded systems.
-//!
-//! ## Features
-//!
-//! - **Intelligent Routing**: Learns network topology, routes messages efficiently
-//! - **Multi-Protocol**: TCP, UDP, Serial support
-//! - **Reliability**: Automatic endpoint restart, deduplication, filtering
-//! - **Performance**: 50ns routing lookup, 34kHz+ throughput tested
+//! MAVLink router: learns network topology from traffic, routes by
+//! `system_id`/`component_id`, and supports Serial, UDP, and TCP endpoints
+//! in either client or server mode. See the [`Router`] handle for the
+//! entry points.
 //!
 //! ## Public API surface
 //!

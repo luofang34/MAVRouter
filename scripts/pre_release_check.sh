@@ -14,27 +14,32 @@ echo "========================================="
 echo "Pre-Release Validation"
 echo "========================================="
 
-# 1. Format code
+# 1. CHANGELOG / Cargo.toml version parity
 echo ""
-echo "[1/4] Formatting code..."
+echo "[1/5] Checking CHANGELOG version matches Cargo.toml..."
+"$SCRIPT_DIR/check-changelog.sh"
+
+# 2. Format code
+echo ""
+echo "[2/5] Formatting code..."
 cargo fmt --all
 echo "✅ Code formatted"
 
-# 2. Rust tests
+# 3. Rust tests
 echo ""
-echo "[2/4] Running Rust tests (release mode)..."
+echo "[3/5] Running Rust tests (release mode)..."
 cargo test --release --all-targets --quiet
 echo "✅ Rust tests passed"
 
-# 3. Clippy
+# 4. Clippy
 echo ""
-echo "[3/4] Running clippy..."
+echo "[4/5] Running clippy..."
 cargo clippy --all-targets -- -D warnings
 echo "✅ Clippy passed"
 
-# 4. Hardware tests
+# 5. Hardware tests
 echo ""
-echo "[4/4] Hardware validation..."
+echo "[5/5] Hardware validation..."
 
 # Check if user wants to skip
 if [ "${SKIP_HW_TEST}" = "1" ]; then

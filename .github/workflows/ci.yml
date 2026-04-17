@@ -101,6 +101,24 @@ jobs:
         run: |
           cargo rustdoc --lib -- -D rustdoc::broken_intra_doc_links
 
+  link-check:
+    name: Markdown Link Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # `lychee` catches broken http(s) links in README, CHANGELOG, and any
+      # other markdown file. Intra-doc links inside the Rust source are
+      # covered separately by the `docs-check` job above.
+      - name: Check markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --verbose
+            --no-progress
+            --exclude-path target
+            './**/*.md'
+          fail: true
+
   bench:
     name: Benchmark
     runs-on: ubuntu-latest
