@@ -150,12 +150,7 @@ impl Router {
     pub async fn stop(self) {
         info!("Router stopping...");
         self.cancel_token.cancel();
-
-        // Give tasks time to flush and cleanup
-        tokio::time::sleep(Duration::from_millis(500)).await;
-
         shutdown_with_timeout(self.tasks, Duration::from_secs(5)).await;
-
         info!("Router stopped");
     }
 
