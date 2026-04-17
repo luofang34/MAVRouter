@@ -12,6 +12,30 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 
+/// Reserve `n` ephemeral TCP ports by binding temporary listeners on
+/// 127.0.0.1:0, reading back the kernel-assigned ports, then dropping
+/// the listeners so the router's real endpoints can bind them.
+fn claim_tcp_ports(n: usize) -> Vec<u16> {
+    let listeners: Vec<std::net::TcpListener> = (0..n)
+        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("reserve tcp port"))
+        .collect();
+    let ports: Vec<u16> = listeners
+        .iter()
+        .map(|l| l.local_addr().expect("local_addr").port())
+        .collect();
+    drop(listeners);
+    ports
+}
+
+/// Reserve one ephemeral UDP port. See [`claim_tcp_ports`] for the
+/// reason we grab-and-release instead of passing the kernel `:0`
+/// through TOML directly (the TOML-driven public API doesn't surface
+/// the post-bind address back to the test).
+fn claim_udp_port() -> u16 {
+    let sock = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve udp port");
+    sock.local_addr().expect("local_addr").port()
+}
+
 /// Build a MAVLink v2 HEARTBEAT as raw bytes.
 fn heartbeat_bytes() -> Vec<u8> {
     let header = MavHeader {
@@ -29,30 +53,37 @@ fn heartbeat_bytes() -> Vec<u8> {
 #[tokio::test]
 #[serial]
 async fn test_udp_to_tcp_echo() {
-    let toml = r#"
+    let udp_port = claim_udp_port();
+    let tcp_port = claim_tcp_ports(1)[0];
+
+    let toml = format!(
+        r#"
 [general]
 bus_capacity = 100
 dedup_period_ms = 0
 
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:14550"
+address = "127.0.0.1:{udp_port}"
 mode = "server"
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:15760"
+address = "127.0.0.1:{tcp_port}"
 mode = "server"
-"#;
+"#,
+    );
 
-    let router = Router::from_str(toml).await.expect("router should start");
+    let router = Router::from_str(&toml).await.expect("router should start");
 
     // Let both endpoints bind.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    udp.connect("127.0.0.1:14550").await.unwrap();
-    let mut tcp = TcpStream::connect("127.0.0.1:15760").await.unwrap();
+    udp.connect(format!("127.0.0.1:{udp_port}")).await.unwrap();
+    let mut tcp = TcpStream::connect(format!("127.0.0.1:{tcp_port}"))
+        .await
+        .unwrap();
 
     // Give the TCP client time to land in the broadcast subscriber list.
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -81,28 +112,38 @@ mode = "server"
 #[tokio::test]
 #[serial]
 async fn test_tcp_to_tcp_bidirectional() {
-    let toml = r#"
+    let ports = claim_tcp_ports(2);
+    let port_a = ports[0];
+    let port_b = ports[1];
+
+    let toml = format!(
+        r#"
 [general]
 bus_capacity = 100
 dedup_period_ms = 0
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:15761"
+address = "127.0.0.1:{port_a}"
 mode = "server"
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:15762"
+address = "127.0.0.1:{port_b}"
 mode = "server"
-"#;
+"#,
+    );
 
-    let router = Router::from_str(toml).await.expect("router should start");
+    let router = Router::from_str(&toml).await.expect("router should start");
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let mut client1 = TcpStream::connect("127.0.0.1:15761").await.unwrap();
-    let mut client2 = TcpStream::connect("127.0.0.1:15762").await.unwrap();
+    let mut client1 = TcpStream::connect(format!("127.0.0.1:{port_a}"))
+        .await
+        .unwrap();
+    let mut client2 = TcpStream::connect(format!("127.0.0.1:{port_b}"))
+        .await
+        .unwrap();
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
