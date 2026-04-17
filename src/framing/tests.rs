@@ -204,7 +204,12 @@ fn test_stream_parser_buffer_overflow() {
 
     for _ in 0..20 {
         parser.push(&garbage);
-        let _ = parser.parse_next(); // Clears buffer since no STX
+        // Call for side effect: parse_next scans for STX, finds none,
+        // and drops the buffer. The returned `Option<MavlinkFrame>` is
+        // always `None` here (no STX → no frame) and not what the test
+        // is asserting on — the assertion is that pushing 2MB doesn't
+        // blow past MAX_BUFFER_SIZE, checked after the loop.
+        let _ = parser.parse_next();
     }
 
     let header = MavHeader {
