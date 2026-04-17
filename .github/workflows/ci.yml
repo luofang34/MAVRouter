@@ -151,6 +151,7 @@ jobs:
           cargo bench --features _internal --bench filter_bench -- --test
           cargo bench --features _internal --bench clone_benchmark -- --test
           cargo bench --features _internal --bench routing_contention_bench -- --test
+          cargo bench --features _internal --bench pipeline_benchmark -- --test
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:

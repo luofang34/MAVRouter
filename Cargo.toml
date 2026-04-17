@@ -84,6 +84,11 @@ name = "routing_contention_bench"
 harness = false
 required-features = ["_internal"]
 
+[[bench]]
+name = "pipeline_benchmark"
+harness = false
+required-features = ["_internal"]
+
 [lints.rust]
 unsafe_code = { level = "forbid", priority = -1 }
 

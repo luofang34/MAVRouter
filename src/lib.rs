@@ -75,6 +75,13 @@ pub mod error;
 // so `cargo bench` turns it on automatically; every other build path sees
 // the strict `pub(crate)` visibility.
 
+/// Sharded time-bucket deduplication. Exposed only under the
+/// `_internal` feature for benchmark access; not part of the public
+/// API. Dedup is applied internally by every endpoint on the ingress
+/// hot path; library users don't need to touch it directly.
+#[cfg(feature = "_internal")]
+pub mod dedup;
+#[cfg(not(feature = "_internal"))]
 pub(crate) mod dedup;
 pub(crate) mod endpoint_core;
 pub(crate) mod endpoints {
