@@ -10,7 +10,6 @@
 
 use mavlink::MavHeader;
 use mavrouter::Router;
-use serial_test::serial;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -54,7 +53,6 @@ fn build_heartbeat_bytes() -> Vec<u8> {
 
 /// Router UDP-client endpoint forwards bus traffic to an external UDP socket.
 #[tokio::test]
-#[serial]
 async fn test_udp_client_mode_forwarding() {
     // The UDP sink stays bound for the whole test — the router's
     // UDP-client endpoint will send packets to this port. Bind it on
@@ -135,7 +133,6 @@ mode = "server"
 /// Router TCP-client endpoint connects to an external TCP server and
 /// forwards traffic out through the established connection.
 #[tokio::test]
-#[serial]
 async fn test_tcp_client_mode_forwarding() {
     // External TCP server that the router's TCP-client endpoint will
     // dial. Bind on `:0` and read back the assigned port — we keep the
@@ -211,7 +208,6 @@ mode = "server"
 /// Router TCP-server enforces its `MAX_TCP_CLIENTS` ceiling. Connect 100
 /// clients (all should succeed), then verify the 101st is dropped.
 #[tokio::test]
-#[serial]
 async fn test_tcp_server_connection_limit() {
     let tcp_port = claim_tcp_ports(1)[0];
 

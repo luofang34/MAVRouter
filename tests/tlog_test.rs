@@ -10,7 +10,6 @@
 #![allow(clippy::unwrap_used)]
 
 use mavrouter::Router;
-use serial_test::serial;
 use std::time::Duration;
 
 fn create_test_dir(name: &str) -> std::path::PathBuf {
@@ -39,7 +38,6 @@ fn claim_udp_port() -> u16 {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_tlog_file_creation() {
     let temp_dir = create_test_dir("tlog_creation");
     let log_path = toml_safe_path(&temp_dir);

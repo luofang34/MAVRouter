@@ -7,7 +7,6 @@
 
 use mavlink::MavHeader;
 use mavrouter::Router;
-use serial_test::serial;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -51,7 +50,6 @@ fn heartbeat_bytes() -> Vec<u8> {
 
 /// UDP → TCP loopback through a two-endpoint Router.
 #[tokio::test]
-#[serial]
 async fn test_udp_to_tcp_echo() {
     let udp_port = claim_udp_port();
     let tcp_port = claim_tcp_ports(1)[0];
@@ -110,7 +108,6 @@ mode = "server"
 
 /// TCP → TCP loopback: two TCP server endpoints bridged by the router's bus.
 #[tokio::test]
-#[serial]
 async fn test_tcp_to_tcp_bidirectional() {
     let ports = claim_tcp_ports(2);
     let port_a = ports[0];

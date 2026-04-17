@@ -11,7 +11,6 @@
 
 use mavlink::{MavHeader, Message};
 use mavrouter::Router;
-use serial_test::serial;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -89,7 +88,6 @@ fn command_long_bytes(target_sys: u8, source_sys: u8) -> Vec<u8> {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_targeted_message_routing() {
     let ports = claim_tcp_ports(3);
     let port1 = ports[0];
@@ -173,7 +171,6 @@ mode = "server"
 }
 
 #[tokio::test]
-#[serial]
 async fn test_unknown_target_dropped() {
     let port = claim_tcp_ports(1)[0];
 
