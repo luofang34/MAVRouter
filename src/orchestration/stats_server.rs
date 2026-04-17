@@ -1,9 +1,13 @@
 //! Unix-domain stats socket: accepts line-oriented queries (`stats`,
 //! `endpoint_stats`, `help`) and responds with single-shot JSON.
 //!
-//! Declared behind `#[cfg(unix)]` in `main.rs` — Windows builds skip this
-//! module entirely (the binary never instantiates the stats socket there).
+//! Gated behind `#[cfg(unix)]` at the module declaration in
+//! `orchestration.rs`. Windows builds skip this module entirely.
 
+// Used only by the binary (`main.rs`); the library never spawns this.
+#![allow(dead_code)]
+
+use super::{supervise, NamedTask};
 use crate::endpoint_core::EndpointStats;
 use crate::router::EndpointId;
 use crate::routing::RoutingTable;
@@ -15,7 +19,34 @@ use tokio::net::UnixListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-pub async fn run_stats_server(
+/// Spawn the stats Unix-socket query server, wrapped in the standard
+/// supervisor so crashes get restarted with exponential backoff. Returns
+/// `None` when `socket_path` is empty (caller treats that as "not
+/// configured"); otherwise a named task the caller pushes into its
+/// shutdown-join list.
+pub fn spawn_stats_socket(
+    socket_path: String,
+    routing_table: Arc<RoutingTable>,
+    ep_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,
+    cancel_token: CancellationToken,
+) -> Option<NamedTask> {
+    if socket_path.is_empty() {
+        return None;
+    }
+    let name = format!("Stats Socket {}", socket_path);
+    let supervisor_name = name.clone();
+    let task_token = cancel_token;
+    let handle = tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
+        let rt = routing_table.clone();
+        let ep_st = ep_stats.clone();
+        let token = task_token.clone();
+        let path = socket_path.clone();
+        async move { run_stats_server(path, rt, ep_st, token).await }
+    }));
+    Some(NamedTask::new(name, handle))
+}
+
+async fn run_stats_server(
     socket_path: String,
     routing_table: Arc<RoutingTable>,
     ep_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,

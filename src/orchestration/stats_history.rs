@@ -3,6 +3,10 @@
 //! This module provides structures and methods to track and aggregate
 //! routing statistics over time windows.
 
+// Consumed only by the binary-gated `stats_reporter`; the library never
+// constructs a `StatsHistory` directly.
+#![allow(dead_code)]
+
 use crate::routing::RoutingStats;
 use std::collections::VecDeque;
 
