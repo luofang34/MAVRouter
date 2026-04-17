@@ -16,6 +16,21 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+/// Reserve `n` ephemeral TCP ports by binding temporary listeners on
+/// 127.0.0.1:0, reading back the kernel-assigned ports, then dropping
+/// the listeners so the router's real endpoints can bind them.
+fn claim_tcp_ports(n: usize) -> Vec<u16> {
+    let listeners: Vec<std::net::TcpListener> = (0..n)
+        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("reserve tcp port"))
+        .collect();
+    let ports: Vec<u16> = listeners
+        .iter()
+        .map(|l| l.local_addr().expect("local_addr").port())
+        .collect();
+    drop(listeners);
+    ports
+}
+
 async fn read_mavlink(client: &mut TcpStream) -> Option<(MavHeader, mavlink::common::MavMessage)> {
     let mut buf = [0u8; 1024];
     match tokio::time::timeout(Duration::from_secs(1), client.read(&mut buf)).await {
@@ -76,33 +91,46 @@ fn command_long_bytes(target_sys: u8, source_sys: u8) -> Vec<u8> {
 #[tokio::test]
 #[serial]
 async fn test_targeted_message_routing() {
-    let toml = r#"
+    let ports = claim_tcp_ports(3);
+    let port1 = ports[0];
+    let port2 = ports[1];
+    let port3 = ports[2];
+
+    let toml = format!(
+        r#"
 [general]
 bus_capacity = 100
 dedup_period_ms = 0
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:16001"
+address = "127.0.0.1:{port1}"
 mode = "server"
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:16002"
+address = "127.0.0.1:{port2}"
 mode = "server"
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:16003"
+address = "127.0.0.1:{port3}"
 mode = "server"
-"#;
+"#,
+    );
 
-    let router = Router::from_str(toml).await.expect("router should start");
+    let router = Router::from_str(&toml).await.expect("router should start");
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let mut client1 = TcpStream::connect("127.0.0.1:16001").await.unwrap();
-    let mut client2 = TcpStream::connect("127.0.0.1:16002").await.unwrap();
-    let mut client3 = TcpStream::connect("127.0.0.1:16003").await.unwrap();
+    let mut client1 = TcpStream::connect(format!("127.0.0.1:{port1}"))
+        .await
+        .unwrap();
+    let mut client2 = TcpStream::connect(format!("127.0.0.1:{port2}"))
+        .await
+        .unwrap();
+    let mut client3 = TcpStream::connect(format!("127.0.0.1:{port3}"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Each client announces a unique system id so the router learns where
@@ -147,21 +175,27 @@ mode = "server"
 #[tokio::test]
 #[serial]
 async fn test_unknown_target_dropped() {
-    let toml = r#"
+    let port = claim_tcp_ports(1)[0];
+
+    let toml = format!(
+        r#"
 [general]
 bus_capacity = 100
 dedup_period_ms = 0
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:16010"
+address = "127.0.0.1:{port}"
 mode = "server"
-"#;
+"#,
+    );
 
-    let router = Router::from_str(toml).await.expect("router should start");
+    let router = Router::from_str(&toml).await.expect("router should start");
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let mut client = TcpStream::connect("127.0.0.1:16010").await.unwrap();
+    let mut client = TcpStream::connect(format!("127.0.0.1:{port}"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Client announces as system 1.

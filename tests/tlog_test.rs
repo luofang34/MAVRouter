@@ -29,11 +29,21 @@ fn cleanup_test_dir(dir: &std::path::Path) {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// Reserve one ephemeral UDP port. Bind a throwaway socket on
+/// 127.0.0.1:0, read back the kernel-assigned port, drop the socket
+/// so the router's UDP endpoint can bind it — avoids the hard-coded
+/// port conflicts CLAUDE.md forbids.
+fn claim_udp_port() -> u16 {
+    let sock = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve udp port");
+    sock.local_addr().expect("local_addr").port()
+}
+
 #[tokio::test]
 #[serial]
 async fn test_tlog_file_creation() {
     let temp_dir = create_test_dir("tlog_creation");
     let log_path = toml_safe_path(&temp_dir);
+    let udp_port = claim_udp_port();
 
     let toml_cfg = format!(
         r#"
@@ -44,7 +54,7 @@ bus_capacity = 100
 
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:18550"
+address = "127.0.0.1:{udp_port}"
 mode = "server"
 "#,
     );
