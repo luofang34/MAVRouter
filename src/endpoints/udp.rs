@@ -314,7 +314,16 @@ pub async fn run(
                     }
                 }
                 Err(RecvError::Lagged(n)) => {
-                    warn!("UDP Sender lagged: missed {} messages", n);
+                    // Dropping bus messages is a correctness signal, not
+                    // noise — count it and emit at error! so the stats
+                    // pipeline and operators both see it (matches the
+                    // convention established in endpoint_core::stream_loop).
+                    core_tx.stats.bus_lagged.fetch_add(n, Ordering::Relaxed);
+                    error!(
+                        "UDP Sender bus receiver lagged: dropped {} messages (bus_lagged now {})",
+                        n,
+                        core_tx.stats.bus_lagged.load(Ordering::Relaxed)
+                    );
                 }
                 Err(RecvError::Closed) => break,
             }
@@ -347,138 +356,4 @@ pub async fn run(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing,
-    clippy::cast_possible_truncation
-)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_broadcast_addr_global() {
-        let addr: SocketAddr = "255.255.255.255:14550".parse().unwrap();
-        assert!(is_broadcast_addr(&addr));
-    }
-
-    #[test]
-    fn test_is_broadcast_addr_subnet() {
-        let addr: SocketAddr = "192.168.1.255:14550".parse().unwrap();
-        assert!(is_broadcast_addr(&addr));
-    }
-
-    #[test]
-    fn test_is_broadcast_addr_unicast() {
-        let addr: SocketAddr = "192.168.1.1:14550".parse().unwrap();
-        assert!(!is_broadcast_addr(&addr));
-    }
-
-    #[test]
-    fn test_is_broadcast_addr_ipv6() {
-        let addr: SocketAddr = "[::1]:14550".parse().unwrap();
-        assert!(!is_broadcast_addr(&addr));
-    }
-
-    #[test]
-    fn test_is_broadcast_addr_10_network() {
-        let addr: SocketAddr = "10.0.0.255:14550".parse().unwrap();
-        assert!(is_broadcast_addr(&addr));
-    }
-
-    #[test]
-    fn test_broadcast_peer_state_machine() {
-        // Simulate the broadcast peer state transitions
-        let peer: Arc<Mutex<Option<(SocketAddr, Instant)>>> = Arc::new(Mutex::new(None));
-        let broadcast_addr: SocketAddr = "192.168.1.255:14550".parse().unwrap();
-        let unicast_addr: SocketAddr = "192.168.1.42:14550".parse().unwrap();
-        let timeout = Duration::from_millis(100);
-
-        // Initially no peer -> send to broadcast
-        {
-            let p = peer.lock();
-            let send_addr = match &*p {
-                Some((addr, last_seen)) if last_seen.elapsed() < timeout => *addr,
-                _ => broadcast_addr,
-            };
-            assert_eq!(send_addr, broadcast_addr);
-        }
-
-        // Simulate receiving from unicast peer
-        {
-            let mut p = peer.lock();
-            *p = Some((unicast_addr, Instant::now()));
-        }
-
-        // Now should send to unicast peer
-        {
-            let p = peer.lock();
-            let send_addr = match &*p {
-                Some((addr, last_seen)) if last_seen.elapsed() < timeout => *addr,
-                _ => broadcast_addr,
-            };
-            assert_eq!(send_addr, unicast_addr);
-        }
-
-        // Simulate timeout by setting last_seen in the past
-        {
-            let mut p = peer.lock();
-            *p = Some((unicast_addr, Instant::now() - Duration::from_millis(200)));
-        }
-
-        // After timeout, should revert to broadcast
-        {
-            let p = peer.lock();
-            let send_addr = match &*p {
-                Some((addr, last_seen)) if last_seen.elapsed() < timeout => *addr,
-                _ => broadcast_addr,
-            };
-            assert_eq!(send_addr, broadcast_addr);
-        }
-    }
-
-    #[test]
-    fn test_client_bind_addr_ipv4() {
-        let target: SocketAddr = "192.168.1.1:14550".parse().unwrap();
-        assert_eq!(client_bind_addr(&target), "0.0.0.0:0");
-    }
-
-    #[test]
-    fn test_client_bind_addr_ipv6() {
-        let target: SocketAddr = "[::1]:14550".parse().unwrap();
-        assert_eq!(client_bind_addr(&target), "[::]:0");
-    }
-
-    #[test]
-    fn test_ipv4_target_detection() {
-        let addr: SocketAddr = "127.0.0.1:14550".parse().unwrap();
-        assert!(addr.is_ipv4());
-    }
-
-    #[test]
-    fn test_ipv6_target_detection() {
-        let addr: SocketAddr = "[::1]:14550".parse().unwrap();
-        assert!(addr.is_ipv6());
-    }
-
-    #[test]
-    fn test_is_broadcast_addr_ipv6_not_broadcast() {
-        let addr: SocketAddr = "[fe80::1]:14550".parse().unwrap();
-        assert!(!is_broadcast_addr(&addr));
-    }
-
-    #[tokio::test]
-    async fn test_udp_ipv6_bind() {
-        // Try to bind to IPv6 - skip test if not supported
-        match tokio::net::UdpSocket::bind("[::]:0").await {
-            Ok(sock) => {
-                let addr = sock.local_addr().unwrap();
-                assert!(addr.is_ipv6());
-            }
-            Err(_) => {
-                // IPv6 not available in this environment, skip
-            }
-        }
-    }
-}
+mod tests;

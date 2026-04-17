@@ -20,8 +20,9 @@ use bytes::Bytes;
 use mavlink::{MavHeader, MavlinkVersion, Message};
 use serial_test::serial;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
 
 fn build_heartbeat_bytes() -> (MavHeader, u32, Vec<u8>) {
@@ -60,8 +61,10 @@ async fn test_tlog_message_format() {
         .expect("temp dir should be valid UTF-8")
         .to_string();
     let tlog_token = cancel_token.clone();
+    let tlog_lagged = Arc::new(AtomicU64::new(0));
 
-    let tlog_handle = tokio::spawn(async move { run(dir_str, bus_rx, tlog_token).await });
+    let tlog_handle =
+        tokio::spawn(async move { run(dir_str, bus_rx, tlog_lagged, tlog_token).await });
 
     // Let the TLog endpoint initialise and create the file.
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -150,6 +153,77 @@ async fn test_tlog_message_format() {
     assert_eq!(mavlink_bytes.len(), serialized.len());
     assert_eq!(mavlink_bytes, &serialized[..]);
     assert_eq!(mavlink_bytes[0], 0xFD); // MAVLink v2 magic
+
+    cleanup_test_dir(&temp_dir);
+}
+
+// ============================================================================
+// Lagged-event counter assertion — mirrors the pattern enforced in
+// endpoint_core::tests::lagged for the stream_loop path. TLog subscribes
+// to the same bus broadcast channel and must treat `RecvError::Lagged(n)`
+// as a counted correctness signal, not noise.
+// ============================================================================
+
+/// Flood a capacity-2 bus before the TLog task ever polls, then spawn
+/// it with a tiny cancel window. The task's first `recv()` returns one
+/// big `Lagged(n)`, which must bump the injected `bus_lagged` counter.
+#[tokio::test]
+#[serial]
+async fn tlog_counts_lagged_from_bus() {
+    let temp_dir = create_test_dir("tlog_lagged");
+
+    let bus = create_bus(2);
+    let bus_rx = bus.subscribe();
+    let cancel_token = CancellationToken::new();
+    let lagged = Arc::new(AtomicU64::new(0));
+
+    let (header, message_id, serialized) = build_heartbeat_bytes();
+    let template = RoutedMessage {
+        source_id: EndpointId(0),
+        header,
+        message_id,
+        version: MavlinkVersion::V2,
+        timestamp_us: 0,
+        serialized_bytes: Bytes::from(serialized),
+        target: MessageTarget {
+            system_id: 0,
+            component_id: 0,
+        },
+    };
+
+    // Flood BEFORE spawning — ring buffer silently overwrites old entries.
+    const FLOOD_COUNT: usize = 1000;
+    for _ in 0..FLOOD_COUNT {
+        bus.tx.send(Arc::new(template.clone())).ok();
+    }
+
+    let dir_str = temp_dir
+        .to_str()
+        .expect("temp dir should be valid UTF-8")
+        .to_string();
+    let tlog_token = cancel_token.clone();
+    let tlog_lagged = lagged.clone();
+    let tlog_handle =
+        tokio::spawn(async move { run(dir_str, bus_rx, tlog_lagged, tlog_token).await });
+
+    // Poll until the counter reflects the lag.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while lagged.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+        tokio::task::yield_now().await;
+    }
+
+    cancel_token.cancel();
+    tokio::time::timeout(Duration::from_secs(2), tlog_handle)
+        .await
+        .ok();
+
+    let observed = lagged.load(Ordering::Relaxed);
+    assert!(
+        observed > 0,
+        "expected bus_lagged > 0 after flooding {} messages into a capacity-2 bus, got {}",
+        FLOOD_COUNT,
+        observed
+    );
 
     cleanup_test_dir(&temp_dir);
 }

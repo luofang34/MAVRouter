@@ -8,13 +8,14 @@
 use crate::error::{Result, RouterError};
 use crate::router::RoutedMessage;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, File};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 /// Interval for periodic flushing of TLOG buffer
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
@@ -29,6 +30,10 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 ///
 /// * `logs_dir` - The directory where TLOG files should be saved.
 /// * `bus_rx` - Receiver half of the message bus, subscribed to all `RoutedMessage`s.
+/// * `bus_lagged` - Shared counter bumped by `n` whenever the broadcast
+///   receiver reports `Lagged(n)`. Owned by the caller so stats
+///   aggregation can observe drops without TLog needing its own stats
+///   surface.
 /// * `cancel_token` - `CancellationToken` to signal graceful shutdown.
 ///
 /// # Returns
@@ -45,6 +50,7 @@ const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 pub async fn run(
     logs_dir: String,
     mut bus_rx: broadcast::Receiver<Arc<RoutedMessage>>,
+    bus_lagged: Arc<AtomicU64>,
     cancel_token: CancellationToken,
 ) -> Result<()> {
     let dir = Path::new(&logs_dir);
@@ -108,7 +114,17 @@ pub async fn run(
                         }
                     }
                     Err(RecvError::Lagged(n)) => {
-                        warn!("TLog Logger lagged: missed {} messages", n);
+                        // Dropping TLog-bound messages is a correctness
+                        // signal, not noise — count it and emit at
+                        // error! so the stats pipeline and operators
+                        // both see it (matches the convention in
+                        // endpoint_core::stream_loop).
+                        bus_lagged.fetch_add(n, Ordering::Relaxed);
+                        error!(
+                            "TLog Logger bus receiver lagged: dropped {} messages (bus_lagged now {})",
+                            n,
+                            bus_lagged.load(Ordering::Relaxed)
+                        );
                     }
                     Err(RecvError::Closed) => break,
                 }
