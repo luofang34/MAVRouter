@@ -113,6 +113,12 @@ jobs:
       # `lychee` catches broken http(s) links in README, CHANGELOG, and any
       # other markdown file. Intra-doc links inside the Rust source are
       # covered separately by the `docs-check` job above.
+      #
+      # `--accept 200..=299,429,500..=504` tolerates transient upstream
+      # infra errors (GitHub returning 502 on release pages, etc.) without
+      # masking genuinely-broken links — 4xx (other than rate-limit 429)
+      # still fails the build. `--max-retries 5 --retry-wait-time 3` gives
+      # lychee enough room to ride out short outages before giving up.
       - name: Check markdown links
         uses: lycheeverse/lychee-action@v2
         with:
@@ -120,6 +126,9 @@ jobs:
             --verbose
             --no-progress
             --exclude-path target
+            --max-retries 5
+            --retry-wait-time 3
+            --accept 200..=299,429,500..=504
             './**/*.md'
           fail: true
 
