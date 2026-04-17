@@ -9,3 +9,9 @@
 disallowed-types = [
     { path = "anyhow::Error", reason = "use RouterError with explicit map_err instead" },
 ]
+
+# Align the `too_many_lines` lint with the CLAUDE.md 80-line function budget.
+# The lint is enabled at warn level in CI (see `.github/workflows/ci.yml`
+# `size-budget` job) rather than deny, so existing over-budget functions can
+# be reported and tightened incrementally.
+too-many-lines-threshold = 80

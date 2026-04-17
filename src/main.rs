@@ -16,6 +16,11 @@ mod mavlink_utils;
 mod routing;
 mod stats;
 
+#[cfg(unix)]
+mod main_stats_server;
+#[cfg(unix)]
+use crate::main_stats_server::run_stats_server;
+
 use crate::config::Config;
 use crate::error::Result;
 use crate::orchestration::NamedTask;
@@ -27,134 +32,9 @@ use tracing::{error, info, warn};
 
 #[cfg(unix)]
 use crate::orchestration::supervise;
-#[cfg(unix)]
-use crate::routing::RoutingTable;
-#[cfg(unix)]
-use parking_lot::RwLock;
-#[cfg(unix)]
-use std::sync::Arc;
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
-use std::path::Path;
-#[cfg(unix)]
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-#[cfg(unix)]
-use tokio::net::UnixListener;
 #[cfg(unix)]
 use tokio::signal::unix::{signal, Signal, SignalKind};
-
-#[cfg(unix)]
-use crate::endpoint_core::EndpointStats;
-#[cfg(unix)]
-use crate::router::EndpointId;
-
-#[cfg(unix)]
-async fn run_stats_server(
-    socket_path: String,
-    routing_table: Arc<RwLock<RoutingTable>>,
-    ep_stats: Vec<(EndpointId, String, Arc<EndpointStats>)>,
-    token: CancellationToken,
-) -> crate::error::Result<()> {
-    let path = Path::new(&socket_path);
-    if path.exists() {
-        tokio::fs::remove_file(path)
-            .await
-            .map_err(|e| crate::error::RouterError::filesystem(&socket_path, e))?;
-    }
-
-    let listener = UnixListener::bind(path)
-        .map_err(|e| crate::error::RouterError::network(&socket_path, e))?;
-    info!("Stats Query Interface listening on {}", socket_path);
-
-    let metadata = std::fs::metadata(path)
-        .map_err(|e| crate::error::RouterError::filesystem(&socket_path, e))?;
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(0o660); // Restrict to owner/group read/write
-    std::fs::set_permissions(path, permissions)
-        .map_err(|e| crate::error::RouterError::filesystem(&socket_path, e))?;
-
-    loop {
-        tokio::select! {
-            _ = token.cancelled() => {
-                info!("Stats Server shutting down.");
-                if path.exists() {
-                    if let Err(e) = tokio::fs::remove_file(path).await {
-                        warn!(
-                            "Failed to remove stats socket '{}' on shutdown: {}",
-                            socket_path, e
-                        );
-                    }
-                }
-                break;
-            }
-            accept_res = listener.accept() => {
-                match accept_res {
-                    Ok((mut stream, _addr)) => {
-                        let rt = routing_table.clone();
-                        let ep_stats_clone = ep_stats.clone();
-                        tokio::spawn(async move {
-                            let mut buf = [0u8; 1024];
-                            let n = match stream.read(&mut buf).await {
-                                Ok(n) if n > 0 => n,
-                                _ => return,
-                            };
-
-                            // n comes from stream.read(), always <= buf.len()
-                            #[allow(clippy::indexing_slicing)]
-                            let command = String::from_utf8_lossy(&buf[..n]).trim().to_string();
-                            let response = match command.as_str() {
-                                "stats" => {
-                                    let rt_guard = rt.read();
-                                    let stats = rt_guard.stats();
-                                    format!(
-                                        r#"{{"total_systems":{},"total_routes":{},"total_endpoints":{},"timestamp":{}}}"#,
-                                        stats.total_systems,
-                                        stats.total_routes,
-                                        stats.total_endpoints,
-                                        stats.timestamp
-                                    )
-                                }
-                                "endpoint_stats" => {
-                                    let mut entries = Vec::new();
-                                    for (ep_id, ep_name, ep_st) in &ep_stats_clone {
-                                        let snap = ep_st.snapshot();
-                                        entries.push(format!(
-                                            r#"{{"id":{},"name":"{}","msgs_in":{},"msgs_out":{},"bytes_in":{},"bytes_out":{},"errors":{}}}"#,
-                                            ep_id.0,
-                                            ep_name,
-                                            snap.msgs_in,
-                                            snap.msgs_out,
-                                            snap.bytes_in,
-                                            snap.bytes_out,
-                                            snap.errors
-                                        ));
-                                    }
-                                    format!("[{}]", entries.join(","))
-                                }
-                                "help" => "Available commands: stats, endpoint_stats, help".to_string(),
-                                _ => "Unknown command. Try 'help'".to_string(),
-                            };
-
-                            if let Err(e) = stream.write_all(response.as_bytes()).await {
-                                // Clients routinely disconnect mid-response, so this
-                                // is expected noise — keep it at debug.
-                                tracing::debug!(
-                                    "Stats Server write to client failed: {}", e
-                                );
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        warn!("Stats Server accept error: {}", e);
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
 
 /// Helper struct to handle SIGHUP on Unix and do nothing on Windows
 struct ReloadSignal {

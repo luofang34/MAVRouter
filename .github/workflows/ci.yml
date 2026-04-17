@@ -40,6 +40,32 @@ jobs:
       - name: Linting
         run: cargo clippy --all-targets -- -D warnings
 
+  size-budget:
+    name: Size Budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # Hard limit on file length — fails the job on any `src/**/*.rs` file
+      # larger than the 500-line CLAUDE.md budget.
+      - name: File-length budget (<= 500 lines / src/**/*.rs)
+        run: |
+          set -euo pipefail
+          offenders=$(find src -name '*.rs' -exec wc -l {} \; | awk '$1 > 500 {print}')
+          if [ -n "$offenders" ]; then
+              echo "Files exceed the 500-line budget:"
+              echo "$offenders"
+              exit 1
+          fi
+          echo "All files within the 500-line budget."
+      # Function-length budget: warn (not deny) today so existing over-budget
+      # functions can be tightened incrementally. The 80-line threshold is
+      # enforced via `too-many-lines-threshold = 80` in `clippy.toml`.
+      - name: Function-length budget (warn, threshold 80)
+        run: cargo clippy --all-targets -- -W clippy::too_many_lines
+
   test-release:
     name: Test (Release)
     runs-on: ubuntu-latest
