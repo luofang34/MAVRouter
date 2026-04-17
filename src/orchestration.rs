@@ -352,6 +352,10 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
 mod tests;
 
 mod shutdown;
+mod stats_history;
+mod stats_reporter;
+#[cfg(unix)]
+mod stats_server;
 mod supervisor;
 mod updater;
 
@@ -360,5 +364,13 @@ mod updater;
 // reports the re-export as unused. Allow it — this is the intended contract.
 #[allow(unused_imports)]
 pub use shutdown::shutdown_with_timeout;
+// Stats reporter/socket are spawned only by the binary (`main.rs`);
+// the library's `high_level::Router` doesn't log stats or expose a
+// query socket. Same rationale as `shutdown_with_timeout` above.
+#[allow(unused_imports)]
+pub use stats_reporter::spawn_stats_reporter;
+#[cfg(unix)]
+#[allow(unused_imports)]
+pub use stats_server::spawn_stats_socket;
 pub use supervisor::supervise;
 pub use updater::spawn_routing_updater;

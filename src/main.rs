@@ -14,24 +14,13 @@ mod filter;
 mod framing;
 mod mavlink_utils;
 mod routing;
-mod stats;
-
-#[cfg(unix)]
-mod main_stats_server;
-#[cfg(unix)]
-use crate::main_stats_server::run_stats_server;
 
 use crate::config::Config;
 use crate::error::Result;
-use crate::orchestration::NamedTask;
-use crate::stats::StatsHistory;
 use clap::Parser;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-
-#[cfg(unix)]
-use crate::orchestration::supervise;
 
 #[cfg(unix)]
 use tokio::signal::unix::{signal, Signal, SignalKind};
@@ -174,114 +163,30 @@ async fn main() -> Result<()> {
         // Spawn all endpoints and background tasks via shared orchestration
         let mut orchestrated = crate::orchestration::spawn_all(&config, &cancel_token);
 
-        // Stats Reporting Task (main.rs-specific)
-        let rt_stats = orchestrated.routing_table.clone();
-        let stats_token = cancel_token.child_token();
-        let ep_stats_for_reporter = orchestrated.endpoint_stats.clone();
-
-        let sample_interval = config.general.stats_sample_interval_secs;
-        let retention = config.general.stats_retention_secs;
-        let log_interval = config.general.stats_log_interval_secs;
-
-        if sample_interval > 0 && retention > 0 {
-            orchestrated.tasks.push(NamedTask::new(
-                "Stats Reporter",
-                tokio::spawn(async move {
-                let mut history = StatsHistory::new(retention);
-                let mut last_log_time = 0u64;
-
-                loop {
-                    tokio::select! {
-                        _ = stats_token.cancelled() => {
-                            info!("Stats Reporter shutting down.");
-                            break;
-                        }
-                        _ = tokio::time::sleep(Duration::from_secs(sample_interval)) => {
-                            let mut stats = rt_stats.stats();
-                            // Ensure timestamp reflects sample time
-                            stats.timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                                Ok(d) => d.as_secs(),
-                                Err(e) => {
-                                    // System clock predates the UNIX epoch — can happen on
-                                    // embedded boards with an unset RTC. Record 0 and warn
-                                    // so the anomaly shows up rather than being swallowed.
-                                    warn!("System clock is before UNIX epoch: {}", e);
-                                    0
-                                }
-                            };
-
-                            let current_timestamp = stats.timestamp;
-                            history.push(stats.clone());
-
-                            // Periodic logging
-                            if current_timestamp.saturating_sub(last_log_time) >= log_interval {
-                                // 1 minute aggregation
-                                if let Some(min1) = history.aggregate(60) {
-                                    info!(
-                                        "Stats [1min] avg={:.1} routes, range=[{}-{}]",
-                                        min1.avg_routes, min1.min_routes, min1.max_routes
-                                    );
-                                }
-
-                                // 1 hour aggregation
-                                if let Some(hour1) = history.aggregate(3600) {
-                                    info!(
-                                        "Stats [1hr] avg={:.1} routes, max={}",
-                                        hour1.avg_routes, hour1.max_routes
-                                    );
-                                }
-
-                                // Full retention aggregation
-                                if let Some(all) = history.aggregate(retention) {
-                                    info!(
-                                        "Stats [{}h] avg={:.1} routes, samples={}, systems={}, endpoints={}",
-                                        retention / 3600,
-                                        all.avg_routes,
-                                        all.sample_count,
-                                        stats.total_systems,
-                                        stats.total_endpoints
-                                    );
-                                }
-
-                                // Per-endpoint stats
-                                for (ep_id, ep_name, ep_stats) in &ep_stats_for_reporter {
-                                    let snap = ep_stats.snapshot();
-                                    info!(
-                                        "Endpoint {} ({}) {}",
-                                        ep_id, ep_name, snap
-                                    );
-                                }
-
-                                last_log_time = current_timestamp;
-                            }
-                        }
-                    }
-                }
-            }),
-            ));
+        // Stats Reporter + Stats Socket are spawned from orchestration to
+        // keep main.rs focused on signals and shutdown. Both are optional:
+        // the reporter is gated on non-zero intervals, the socket on a
+        // configured path (and a unix-only build).
+        if let Some(reporter) = crate::orchestration::spawn_stats_reporter(
+            orchestrated.routing_table.clone(),
+            orchestrated.endpoint_stats.clone(),
+            config.general.stats_sample_interval_secs,
+            config.general.stats_retention_secs,
+            config.general.stats_log_interval_secs,
+            cancel_token.child_token(),
+        ) {
+            orchestrated.tasks.push(reporter);
         }
 
-        // Stats Query Interface (Unix Socket, main.rs-specific)
         #[cfg(unix)]
         if let Some(socket_path) = config.general.stats_socket_path.clone() {
-            if !socket_path.is_empty() {
-                let name = format!("Stats Socket {}", socket_path);
-                let rt = orchestrated.routing_table.clone();
-                let ep_stats_for_server = orchestrated.endpoint_stats.clone();
-                let task_token = cancel_token.child_token();
-                let path = socket_path.clone();
-
-                let supervisor_name = name.clone();
-                orchestrated.tasks.push(NamedTask::new(
-                    name,
-                    tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
-                        let rt = rt.clone();
-                        let ep_st = ep_stats_for_server.clone();
-                        let token = task_token.clone();
-                        let p = path.clone();
-                        async move { run_stats_server(p, rt, ep_st, token).await }
-                    })),
-                ));
+            if let Some(socket_task) = crate::orchestration::spawn_stats_socket(
+                socket_path,
+                orchestrated.routing_table.clone(),
+                orchestrated.endpoint_stats.clone(),
+                cancel_token.child_token(),
+            ) {
+                orchestrated.tasks.push(socket_task);
             }
         }
 
