@@ -65,6 +65,10 @@ jobs:
       # enforced via `too-many-lines-threshold = 80` in `clippy.toml`.
       - name: Function-length budget (warn, threshold 80)
         run: cargo clippy --all-targets -- -W clippy::too_many_lines
+      # Guardrail for CLAUDE.md "bind 127.0.0.1:0, never hard-code" — fails
+      # if any hard-coded non-zero port literal reappears in tests/*.rs.
+      - name: No hard-coded test ports
+        run: scripts/check-no-hardcoded-ports.sh
 
   test-release:
     name: Test (Release)

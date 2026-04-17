@@ -15,6 +15,30 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
+/// Reserve `n` ephemeral TCP ports by binding temporary listeners on
+/// 127.0.0.1:0, reading back the kernel-assigned ports, then dropping
+/// the listeners so the router's real endpoints can bind them.
+fn claim_tcp_ports(n: usize) -> Vec<u16> {
+    let listeners: Vec<std::net::TcpListener> = (0..n)
+        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("reserve tcp port"))
+        .collect();
+    let ports: Vec<u16> = listeners
+        .iter()
+        .map(|l| l.local_addr().expect("local_addr").port())
+        .collect();
+    drop(listeners);
+    ports
+}
+
+/// Reserve one ephemeral UDP port. See [`claim_tcp_ports`] for the
+/// reason we grab-and-release instead of passing the kernel `:0`
+/// through TOML directly (the TOML-driven public API doesn't surface
+/// the post-bind address back to the test).
+fn claim_udp_port() -> u16 {
+    let sock = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve udp port");
+    sock.local_addr().expect("local_addr").port()
+}
+
 /// Helper: build a valid MAVLink v2 HEARTBEAT message as raw bytes.
 fn build_heartbeat_bytes() -> Vec<u8> {
     let header = MavHeader {
@@ -32,36 +56,59 @@ fn build_heartbeat_bytes() -> Vec<u8> {
 #[tokio::test]
 #[serial]
 async fn test_udp_client_mode_forwarding() {
-    let udp_recv = UdpSocket::bind("127.0.0.1:19850").await.unwrap();
+    // The UDP sink stays bound for the whole test — the router's
+    // UDP-client endpoint will send packets to this port. Bind it on
+    // `:0` and read back the kernel-assigned port; no grab-and-release
+    // dance needed since we own the socket.
+    let udp_recv = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let udp_port = udp_recv.local_addr().unwrap().port();
+    let tcp_port = claim_tcp_ports(1)[0];
 
-    let toml_config = r#"
+    let toml_config = format!(
+        r#"
 [general]
 bus_capacity = 100
 dedup_period_ms = 0
 
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:19850"
+address = "127.0.0.1:{udp_port}"
 mode = "client"
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:19851"
+address = "127.0.0.1:{tcp_port}"
 mode = "server"
-"#;
+"#,
+    );
 
-    let router = Router::from_str(toml_config).await.unwrap();
+    let router = Router::from_str(&toml_config).await.unwrap();
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let mut tcp_client = TcpStream::connect("127.0.0.1:19851").await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Wait for the router's TCP-server endpoint to accept connections
+    // (instead of a blind sleep). Poll with a short backoff bounded by
+    // a 5s budget — in practice this succeeds on the first try.
+    let mut tcp_client = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match TcpStream::connect(format!("127.0.0.1:{tcp_port}")).await {
+                Ok(s) => break s,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(e) => panic!("router tcp endpoint never became connectable: {}", e),
+            }
+        }
+    };
 
     let heartbeat = build_heartbeat_bytes();
 
     let mut udp_buf = [0u8; 1024];
     let mut received = false;
 
+    // Retry loop: the TCP client has just connected, but the router's
+    // broadcast-subscriber registration happens asynchronously on the
+    // accept path. Repeated sends tolerate the race without a blind
+    // sleep before the loop.
     for _ in 0..10 {
         tcp_client.write_all(&heartbeat).await.unwrap();
 
@@ -90,36 +137,47 @@ mode = "server"
 #[tokio::test]
 #[serial]
 async fn test_tcp_client_mode_forwarding() {
-    let tcp_listener = TcpListener::bind("127.0.0.1:19860").await.unwrap();
+    // External TCP server that the router's TCP-client endpoint will
+    // dial. Bind on `:0` and read back the assigned port — we keep the
+    // listener alive until accept() returns.
+    let tcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let tcp_port = tcp_listener.local_addr().unwrap().port();
+    let udp_port = claim_udp_port();
 
-    let toml_config = r#"
+    let toml_config = format!(
+        r#"
 [general]
 bus_capacity = 100
 dedup_period_ms = 0
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:19860"
+address = "127.0.0.1:{tcp_port}"
 mode = "client"
 
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:19861"
+address = "127.0.0.1:{udp_port}"
 mode = "server"
-"#;
+"#,
+    );
 
-    let router = Router::from_str(toml_config).await.unwrap();
+    let router = Router::from_str(&toml_config).await.unwrap();
 
+    // Block on accept() — the router's TCP-client endpoint will connect
+    // once it's finished spinning up. This is an event-driven wait, no
+    // timing heuristics needed beyond the 5s cap against a broken router.
     let (mut tcp_stream, _addr) =
         tokio::time::timeout(Duration::from_secs(5), tcp_listener.accept())
             .await
             .expect("Timeout waiting for router to connect as TCP client")
             .unwrap();
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
     let udp_sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    udp_sender.connect("127.0.0.1:19861").await.unwrap();
+    udp_sender
+        .connect(format!("127.0.0.1:{udp_port}"))
+        .await
+        .unwrap();
 
     let heartbeat = build_heartbeat_bytes();
 
@@ -155,26 +213,43 @@ mode = "server"
 #[tokio::test]
 #[serial]
 async fn test_tcp_server_connection_limit() {
-    let toml_config = r#"
+    let tcp_port = claim_tcp_ports(1)[0];
+
+    let toml_config = format!(
+        r#"
 [general]
 bus_capacity = 100
 dedup_period_ms = 0
 
 [[endpoint]]
 type = "tcp"
-address = "127.0.0.1:19870"
+address = "127.0.0.1:{tcp_port}"
 mode = "server"
-"#;
+"#,
+    );
 
-    let router = Router::from_str(toml_config).await.unwrap();
+    let router = Router::from_str(&toml_config).await.unwrap();
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Poll until the router's TCP-server endpoint is accepting — avoids
+    // the race between the helper's port-release and the router's bind.
+    let first_client = {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match TcpStream::connect(format!("127.0.0.1:{tcp_port}")).await {
+                Ok(s) => break s,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(e) => panic!("router tcp endpoint never became connectable: {}", e),
+            }
+        }
+    };
 
-    let mut clients = Vec::new();
-    for i in 0..100 {
+    let mut clients = vec![first_client];
+    for i in 1..100 {
         match tokio::time::timeout(
             Duration::from_secs(2),
-            TcpStream::connect("127.0.0.1:19870"),
+            TcpStream::connect(format!("127.0.0.1:{tcp_port}")),
         )
         .await
         {
@@ -195,7 +270,7 @@ mode = "server"
     // OS backlog semantics is racy.
     if let Ok(Ok(mut extra_stream)) = tokio::time::timeout(
         Duration::from_secs(2),
-        TcpStream::connect("127.0.0.1:19870"),
+        TcpStream::connect(format!("127.0.0.1:{tcp_port}")),
     )
     .await
     {
