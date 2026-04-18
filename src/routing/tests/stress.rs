@@ -146,7 +146,7 @@ async fn should_send_makes_progress_under_config_write_contention() {
             let mut i: usize = 0;
             while !reader_stop.load(Ordering::Relaxed) {
                 let sys = ((i % 64) + 1) as u8;
-                let ep = ((r + i) & 0xF) as usize;
+                let ep = (r + i) & 0xF;
                 let _ = reader_rt.should_send(EndpointId(ep), sys, 1);
                 reader_completed.fetch_add(1, Ordering::Relaxed);
                 i = i.wrapping_add(1);
