@@ -101,8 +101,7 @@ impl Config {
     /// assert_eq!(config.endpoint.len(), 1);
     /// ```
     pub fn parse(toml: &str) -> Result<Self> {
-        let config: Config = toml::from_str(toml)
-            .map_err(|e| RouterError::config(format!("Failed to parse config: {}", e)))?;
+        let config: Config = toml::from_str(toml).map_err(RouterError::config_parse)?;
 
         config.validate()?;
 
@@ -172,13 +171,8 @@ impl Config {
                 .await
                 .map_err(|e| RouterError::filesystem(file_path.display().to_string(), e))?;
 
-            let config: Config = toml::from_str(&content).map_err(|e| {
-                RouterError::config(format!(
-                    "Failed to parse config {}: {}",
-                    file_path.display(),
-                    e
-                ))
-            })?;
+            let config: Config = toml::from_str(&content)
+                .map_err(|e| RouterError::config_parse_file(file_path.clone(), e))?;
 
             merged = merged.merge(config);
         }
