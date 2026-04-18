@@ -8,16 +8,13 @@
 //! In **client mode**, it attempts to connect to a remote TCP server and
 //! automatically retries connection if lost.
 
-use crate::dedup::ConcurrentDedup;
-use crate::endpoint_core::{run_stream_loop, EndpointCore, EndpointStats, ExponentialBackoff};
+use crate::endpoint_core::{
+    run_stream_loop, EndpointSpawnContext, EndpointStats, ExponentialBackoff,
+};
 use crate::error::{Result, RouterError};
-use crate::filter::EndpointFilters;
-use crate::router::{EndpointId, RoutedMessage};
-use crate::routing::RoutingTable;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast;
 
 /// Global counter for TCP client endpoint IDs, starting high enough
 /// to avoid collision with configured endpoint IDs (issue #6).
@@ -27,7 +24,6 @@ static NEXT_TCP_CLIENT_ID: AtomicUsize = AtomicUsize::new(10_000);
 const MAX_TCP_CLIENTS: usize = 100;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Runs the TCP endpoint logic, continuously handling connections based on the specified mode.
@@ -39,54 +35,30 @@ use tracing::{debug, error, info, warn};
 ///
 /// # Arguments
 ///
-/// * `id` - Unique identifier for this endpoint.
-/// * `address` - The TCP address to bind to (server) or connect to (client), e.g., "0.0.0.0:5760" or "127.0.0.1:5761".
-/// * `mode` - The operating mode (`EndpointMode::Server` or `EndpointMode::Client`).
-/// * `bus_tx` - Sender half of the message bus for sending `RoutedMessage`s to other endpoints.
-/// * `bus_rx` - Receiver half of the message bus for receiving `RoutedMessage`s from other endpoints.
-/// * `routing_table` - Shared `RoutingTable` to update and query routing information.
-/// * `dedup` - Shared `Dedup` instance for message deduplication.
-/// * `filters` - `EndpointFilters` to apply for this specific endpoint.
-/// * `token` - `CancellationToken` to signal graceful shutdown.
+/// * `ctx` - Shared spawn context (bus, routing table, dedup, filters, stats,
+///   cancellation token).
+/// * `address` - The TCP address to bind to (server) or connect to (client),
+///   e.g. `"0.0.0.0:5760"` or `"127.0.0.1:5761"`.
+/// * `mode` - The operating mode ([`crate::config::EndpointMode::Server`] or
+///   [`crate::config::EndpointMode::Client`]).
 ///
 /// # Returns
 ///
 /// A `Result` indicating success or failure. The function will run indefinitely
-/// until the `CancellationToken` is cancelled or a critical error occurs.
+/// until the cancellation token in `ctx` is cancelled or a critical error occurs.
 ///
 /// # Errors
 ///
 /// Returns a [`crate::error::RouterError`] if:
 /// - Binding to the specified address in server mode fails.
 /// - An unrecoverable error occurs during connection establishment in client mode.
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
-    id: usize,
+    ctx: EndpointSpawnContext,
     address: String,
     mode: crate::config::EndpointMode,
-    bus_tx: broadcast::Sender<Arc<RoutedMessage>>,
-    bus_rx: broadcast::Receiver<Arc<RoutedMessage>>,
-    routing_table: Arc<RoutingTable>,
-    route_update_tx: tokio::sync::mpsc::Sender<crate::routing::RouteUpdate>,
-    dedup: ConcurrentDedup,
-    filters: EndpointFilters,
-    token: CancellationToken,
-    stats: Arc<EndpointStats>,
 ) -> Result<()> {
-    // With tokio::broadcast, new subscribers are created via bus_tx.subscribe()
-    // rather than cloning bus_rx. Drop the receiver to avoid unused variable warnings.
-    drop(bus_rx);
-
-    let core = EndpointCore {
-        id: EndpointId(id),
-        bus_tx: bus_tx.clone(),
-        routing_table: routing_table.clone(),
-        route_update_tx: route_update_tx.clone(),
-        dedup: dedup.clone(),
-        filters: filters.clone(),
-        update_routing: true, // TCP client mode updates routing table
-        stats,
-    };
+    let token = ctx.cancel_token.clone();
+    let core = ctx.endpoint_core(true);
 
     match mode {
         crate::config::EndpointMode::Server => {
@@ -117,17 +89,10 @@ pub async fn run(
                                 let client_id = NEXT_TCP_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
                                 info!("Accepted TCP connection from {} (EndpointId: {})", addr, client_id);
 
-                                // Create a unique core for this client with its own EndpointId
-                                let core_client = EndpointCore {
-                                    id: EndpointId(client_id),
-                                    bus_tx: core.bus_tx.clone(),
-                                    routing_table: core.routing_table.clone(),
-                                    route_update_tx: core.route_update_tx.clone(),
-                                    dedup: core.dedup.clone(),
-                                    filters: core.filters.clone(),
-                                    update_routing: true, // Required for targeted message routing
-                                    stats: Arc::new(EndpointStats::new()),
-                                };
+                                // Each accepted client gets its own EndpointId and stats counters;
+                                // everything else (bus, routing, dedup, filters) is inherited.
+                                let core_client =
+                                    core.child_for_client(client_id, Arc::new(EndpointStats::new()));
                                 let rx_client = core.bus_tx.subscribe();
                                 let token_client = token.clone();
 
@@ -180,7 +145,7 @@ pub async fn run(
                         if let Err(e) = run_stream_loop(
                             read,
                             write,
-                            bus_tx.subscribe(),
+                            core.bus_tx.subscribe(),
                             core.clone(),
                             token.clone(),
                             name.clone(),

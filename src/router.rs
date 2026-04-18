@@ -56,6 +56,11 @@ pub struct MessageBus {
 
 impl MessageBus {
     /// Create a new subscriber to the bus.
+    ///
+    /// Used by library consumers via `Router::bus().subscribe()`. The bin
+    /// target wires endpoints through `EndpointSpawnContext::subscribe_bus`
+    /// instead — both paths bottom out at `broadcast::Sender::subscribe`.
+    #[allow(dead_code)]
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<RoutedMessage>> {
         self.tx.subscribe()
     }

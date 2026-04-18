@@ -5,12 +5,9 @@
 //! serial MAVLink devices. It supports automatic reconnection if the
 //! serial port connection is lost.
 
-use crate::dedup::ConcurrentDedup;
-use crate::endpoint_core::{run_stream_loop, EndpointCore, EndpointStats};
+use crate::endpoint_core::{run_stream_loop, EndpointCore, EndpointSpawnContext};
 use crate::error::{Result, RouterError};
-use crate::filter::EndpointFilters;
-use crate::router::{EndpointId, RoutedMessage};
-use crate::routing::RoutingTable;
+use crate::router::RoutedMessage;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,50 +36,32 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(3);
 ///
 /// # Arguments
 ///
-/// * `id` - Unique identifier for this endpoint.
-/// * `device` - The path to the serial device (e.g., "/dev/ttyACM0" on Linux, "COM1" on Windows).
-/// * `baud` - The baud rate for the serial connection (e.g., 115200).
-/// * `bus_tx` - Sender half of the message bus for sending `RoutedMessage`s to other endpoints.
-/// * `bus_rx` - Receiver half of the message bus for receiving `RoutedMessage`s from other endpoints.
-/// * `routing_table` - Shared `RoutingTable` to update and query routing information.
-/// * `dedup` - Shared `Dedup` instance for message deduplication.
-/// * `filters` - `EndpointFilters` to apply for this specific endpoint.
-/// * `token` - `CancellationToken` to signal graceful shutdown.
+/// * `ctx` - Shared spawn context (bus, routing table, dedup, filters, stats,
+///   cancellation token).
+/// * `device` - The path to the serial device (e.g. `"/dev/ttyACM0"` on
+///   Linux, `"COM1"` on Windows).
+/// * `baud` - The baud rate for the serial connection (e.g. `115200`).
+/// * `flow_control` - Hardware/software/no flow control for the port.
 ///
 /// # Returns
 ///
 /// A `Result` indicating success or failure. The function will run indefinitely
-/// until the `CancellationToken` is cancelled or a critical, unrecoverable error occurs.
+/// until the cancellation token in `ctx` is cancelled or a critical,
+/// unrecoverable error occurs.
 ///
 /// # Errors
 ///
 /// Returns a [`crate::error::RouterError`] if a critical error occurs that prevents further
 /// operation, such as a permanent serial port configuration issue.
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
-    id: usize,
+    ctx: EndpointSpawnContext,
     device: String,
     baud: u32,
     flow_control: tokio_serial::FlowControl,
-    bus_tx: broadcast::Sender<Arc<RoutedMessage>>,
-    bus_rx: broadcast::Receiver<Arc<RoutedMessage>>,
-    routing_table: Arc<RoutingTable>,
-    route_update_tx: tokio::sync::mpsc::Sender<crate::routing::RouteUpdate>,
-    dedup: ConcurrentDedup,
-    filters: EndpointFilters,
-    token: CancellationToken,
-    stats: Arc<EndpointStats>,
 ) -> Result<()> {
-    let core = EndpointCore {
-        id: EndpointId(id),
-        bus_tx: bus_tx.clone(),
-        routing_table: routing_table.clone(),
-        route_update_tx: route_update_tx.clone(),
-        dedup: dedup.clone(),
-        filters: filters.clone(),
-        update_routing: true,
-        stats,
-    };
+    let token = ctx.cancel_token.clone();
+    let bus_rx = ctx.subscribe_bus();
+    let core = ctx.endpoint_core(true);
 
     // No inner retry loop - supervisor handles retries with exponential backoff (issue #26)
     open_and_run(&device, baud, flow_control, bus_rx, core, token).await

@@ -11,7 +11,7 @@ use crate::framing::MavlinkFrame;
 use crate::mavlink_utils::extract_target;
 use crate::router::{EndpointId, RoutedMessage};
 use crate::routing::{RouteUpdate, RoutingTable};
-use mavlink::Message;
+use mavlink::{MavHeader, Message};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -215,96 +215,148 @@ fn timestamp_us_fast() -> u64 {
 }
 
 impl EndpointCore {
-    /// Handles an incoming MAVLink frame, processing it through filters,
-    /// deduplication, and routing table updates, then forwarding it to the message bus.
+    /// Handles an incoming MAVLink frame: filter → dedup → observe → publish.
     ///
-    /// # Arguments
-    ///
-    /// * `frame` - The parsed `MavlinkFrame` containing header, message, and version.
+    /// The orchestrator is intentionally a thin sequence of early-return
+    /// guards. Each stage is a private helper on [`EndpointCore`], so the
+    /// hot path can be bench-profiled stage-by-stage and individual stages
+    /// can be replaced (e.g. swap dedup) without rewriting the others.
     pub fn handle_incoming_frame(&self, frame: MavlinkFrame) {
-        // Cache message_id once (avoids repeated calls through Arc later)
+        // Cache message_id once (avoids repeated calls through Arc later).
         let message_id = frame.message.message_id();
 
-        // Reject invalid/placeholder sources (SysID 0) to avoid polluting routing/clients
-        if frame.header.system_id == 0 {
+        if !self.accept_frame(&frame.header, message_id) {
+            return;
+        }
+        if self.is_duplicate_frame(&frame) {
+            return;
+        }
+        self.observe_route(&frame.header);
+        self.publish_frame(frame, message_id);
+    }
+
+    /// Stage 1 — filter.
+    ///
+    /// Returns `false` when the frame must be dropped before any further
+    /// processing: placeholder sys-id 0, or rejection by the configured
+    /// per-endpoint filters. Cheap; runs first to short-circuit the rest
+    /// of the pipeline.
+    #[inline]
+    fn accept_frame(&self, header: &MavHeader, message_id: u32) -> bool {
+        // Reject invalid/placeholder sources (SysID 0) to avoid polluting
+        // the routing table or client connections with phantom systems.
+        if header.system_id == 0 {
             trace!(
                 "Dropping message with sysid 0 (msg_id {}) from endpoint {}",
                 message_id,
                 self.id
             );
+            return false;
+        }
+        self.filters.check_incoming(header, message_id)
+    }
+
+    /// Stage 2 — deduplication.
+    ///
+    /// Returns `true` when the dedup window already contains this exact
+    /// serialized frame and the orchestrator should drop it. Sharded
+    /// internally so concurrent endpoints don't contend on a global lock.
+    #[inline]
+    fn is_duplicate_frame(&self, frame: &MavlinkFrame) -> bool {
+        self.dedup.check_and_insert(&frame.raw_bytes)
+    }
+
+    /// Stage 3 — route observation.
+    ///
+    /// No-op when [`Self::update_routing`] is `false` (e.g. TCP server's
+    /// per-client cores reuse the parent's routing knowledge). Otherwise
+    /// posts a [`RouteUpdate`] to the dedicated routing-updater task with
+    /// `try_send` so the hot path never blocks; if the queue is saturated
+    /// the observation is dropped and the next ingress (≤ 1s later by
+    /// design) re-checks `needs_update_for_endpoint`.
+    fn observe_route(&self, header: &MavHeader) {
+        if !self.update_routing {
+            return;
+        }
+        let now = Instant::now();
+
+        // Cheap read first; only enqueue an update when one is actually needed.
+        let needs_update = self.routing_table.needs_update_for_endpoint(
+            self.id,
+            header.system_id,
+            header.component_id,
+            now,
+        );
+        if !needs_update {
             return;
         }
 
-        // 1. Check filters FIRST (avoid unnecessary work)
-        if !self.filters.check_incoming(&frame.header, message_id) {
-            return; // Message filtered out, ignore
-        }
-
-        // 2. Use raw bytes from parser (zero-copy, no re-serialization needed)
-        let raw_len = frame.raw_bytes.len() as u64;
-        let serialized_bytes = frame.raw_bytes;
-
-        // 3. Check deduplication (sharded for concurrent access - no global lock)
-        if self.dedup.check_and_insert(&serialized_bytes) {
-            return; // Duplicate message, ignore
-        }
-
-        // 4. Update routing table (skip for endpoints that don't need routing, e.g., TCP server clients)
-        if self.update_routing {
-            let now = Instant::now();
-
-            // Cheap read first; only take write lock when an update is actually needed
-            let needs_update = {
-                let rt = self.routing_table.as_ref();
-                rt.needs_update_for_endpoint(
-                    self.id,
-                    frame.header.system_id,
-                    frame.header.component_id,
-                    now,
-                )
-            };
-
-            if needs_update {
-                // Submit to the dedicated routing updater task. `try_send` never
-                // blocks — if the queue is saturated we drop this observation and
-                // will retry the next time `needs_update_for_endpoint` fires
-                // (≤ 1s later by design). Dropping is strictly preferable to
-                // taking a blocking write lock on a tokio worker thread.
-                let update = RouteUpdate {
-                    endpoint_id: self.id,
-                    sys_id: frame.header.system_id,
-                    comp_id: frame.header.component_id,
-                    now,
-                };
-                if let Err(e) = self.route_update_tx.try_send(update) {
-                    use mpsc::error::TrySendError;
-                    match e {
-                        TrySendError::Full(_) => {
-                            trace!(
-                                endpoint_id = %self.id,
-                                sys_id = frame.header.system_id,
-                                comp_id = frame.header.component_id,
-                                "Routing update queue full; dropping observation (will retry on next ingress)",
-                            );
-                        }
-                        TrySendError::Closed(_) => {
-                            // Updater task has exited — either during shutdown
-                            // or as a bug. Log once so we notice, but keep
-                            // processing frames (routing becomes stale, not wrong).
-                            trace!(
-                                endpoint_id = %self.id,
-                                "Routing update channel closed; observation dropped",
-                            );
-                        }
-                    }
+        let update = RouteUpdate {
+            endpoint_id: self.id,
+            sys_id: header.system_id,
+            comp_id: header.component_id,
+            now,
+        };
+        if let Err(e) = self.route_update_tx.try_send(update) {
+            use mpsc::error::TrySendError;
+            match e {
+                TrySendError::Full(_) => {
+                    trace!(
+                        endpoint_id = %self.id,
+                        sys_id = header.system_id,
+                        comp_id = header.component_id,
+                        "Routing update queue full; dropping observation (will retry on next ingress)",
+                    );
+                }
+                TrySendError::Closed(_) => {
+                    // Updater task has exited — either during shutdown
+                    // or as a bug. Log once so we notice, but keep
+                    // processing frames (routing becomes stale, not wrong).
+                    trace!(
+                        endpoint_id = %self.id,
+                        "Routing update channel closed; observation dropped",
+                    );
                 }
             }
         }
+    }
 
-        // 5. Send to message bus (use fast timestamp instead of syscall)
+    /// Build a derived core for a per-client TCP server connection.
+    ///
+    /// Inherits the bus, routing table, route-update channel, dedup, and
+    /// filter configuration from this parent core; the only overrides are
+    /// the per-client endpoint id (each accepted socket gets its own
+    /// `EndpointId`) and a fresh per-client [`EndpointStats`] so traffic
+    /// counters stay scoped to the connection. `update_routing` is forced
+    /// to `true` because per-client routes are how the server learns
+    /// which client to forward replies to.
+    pub fn child_for_client(&self, client_id: usize, stats: Arc<EndpointStats>) -> Self {
+        Self {
+            id: EndpointId(client_id),
+            bus_tx: self.bus_tx.clone(),
+            routing_table: self.routing_table.clone(),
+            route_update_tx: self.route_update_tx.clone(),
+            dedup: self.dedup.clone(),
+            filters: self.filters.clone(),
+            update_routing: true,
+            stats,
+        }
+    }
+
+    /// Stage 4 — publish.
+    ///
+    /// Wraps the frame in an [`Arc<RoutedMessage>`] (so broadcast fan-out
+    /// is an atomic refcount per subscriber, not a clone), pushes it onto
+    /// the bus, and bumps the per-endpoint ingress counters.
+    fn publish_frame(&self, frame: MavlinkFrame, message_id: u32) {
+        // Use raw bytes from parser (zero-copy, no re-serialization needed).
+        let raw_len = frame.raw_bytes.len() as u64;
+        let serialized_bytes = frame.raw_bytes;
+
+        // Use fast timestamp helper instead of a syscall on every frame.
         let timestamp_us = timestamp_us_fast();
 
-        // Extract target once, cache in RoutedMessage for all endpoints
+        // Extract target once at ingress; per-endpoint check_outgoing reuses it.
         let target = extract_target(&frame.message);
 
         // Wrap once so every downstream subscriber shares a single allocation.
@@ -322,7 +374,6 @@ impl EndpointCore {
             return;
         }
 
-        // 6. Record incoming message stats
         self.stats.msgs_in.fetch_add(1, Ordering::Relaxed);
         self.stats.bytes_in.fetch_add(raw_len, Ordering::Relaxed);
     }
@@ -389,8 +440,47 @@ impl EndpointCore {
     }
 }
 
+mod spawn_context;
 mod stream_loop;
+pub use spawn_context::EndpointSpawnContext;
 pub use stream_loop::run_stream_loop;
+
+/// Pull the next bus message, applying the standard `Lagged`/`Closed`
+/// bookkeeping shared by every endpoint's send loop (UDP, TCP, Serial).
+///
+/// On `Lagged(n)` the count is added to `stats.bus_lagged` and an `error!`
+/// is emitted (drops are a correctness signal, not noise — every
+/// transport's outgoing path must surface them) before transparently
+/// re-polling. On `Closed`, returns `None` so the caller can break out.
+///
+/// # Naming
+///
+/// Suffix `_blocking` is **not** appropriate — this is `async` — but the
+/// returned future does block on `bus_rx.recv().await`. Callers should not
+/// hold any locks across this call; the `await` may park the task.
+pub async fn recv_next_bus_msg(
+    bus_rx: &mut tokio::sync::broadcast::Receiver<Arc<RoutedMessage>>,
+    stats: &EndpointStats,
+    name: &str,
+) -> Option<Arc<RoutedMessage>> {
+    use tokio::sync::broadcast::error::RecvError;
+    loop {
+        match bus_rx.recv().await {
+            Ok(msg) => return Some(msg),
+            Err(RecvError::Lagged(n)) => {
+                stats.bus_lagged.fetch_add(n, Ordering::Relaxed);
+                tracing::error!(
+                    "{} bus receiver lagged: dropped {} messages (bus_lagged now {})",
+                    name,
+                    n,
+                    stats.bus_lagged.load(Ordering::Relaxed)
+                );
+                continue;
+            }
+            Err(RecvError::Closed) => return None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests;

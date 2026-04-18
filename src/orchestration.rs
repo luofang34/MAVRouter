@@ -7,7 +7,7 @@
 
 use crate::config::{Config, EndpointConfig};
 use crate::dedup::ConcurrentDedup;
-use crate::endpoint_core::EndpointStats;
+use crate::endpoint_core::{EndpointSpawnContext, EndpointStats};
 use crate::filter::EndpointFilters;
 use crate::router::{create_bus, EndpointId, MessageBus};
 use crate::routing::{RouteUpdate, RoutingTable};
@@ -34,6 +34,48 @@ const ROUTE_UPDATE_QUEUE_CAPACITY: usize = 4096;
 /// before releasing the routing-table write lock. Larger batches amortise
 /// lock acquisition; too-large batches extend the worst-case read latency.
 const ROUTE_UPDATE_BATCH_SIZE: usize = 256;
+
+/// Builds the per-endpoint name, stats, and [`EndpointSpawnContext`] from a
+/// configured `EndpointConfig`. Centralised so the three transport arms in
+/// `spawn_all` only differ in the transport-specific arguments they pass to
+/// `tcp::run` / `udp::run` / `serial::run`, not in how they assemble the
+/// shared spawn context.
+fn build_endpoint_context(
+    i: usize,
+    cfg: &EndpointConfig,
+    bus: &MessageBus,
+    routing_table: &Arc<RoutingTable>,
+    route_update_tx: &mpsc::Sender<RouteUpdate>,
+    dedup: &ConcurrentDedup,
+    cancel_token: &CancellationToken,
+) -> (String, Arc<EndpointStats>, EndpointSpawnContext) {
+    let (name, filters) = match cfg {
+        EndpointConfig::Udp {
+            address, filters, ..
+        } => (format!("UDP Endpoint {} ({})", i, address), filters.clone()),
+        EndpointConfig::Tcp {
+            address, filters, ..
+        } => (format!("TCP Endpoint {} ({})", i, address), filters.clone()),
+        EndpointConfig::Serial {
+            device, filters, ..
+        } => (
+            format!("Serial Endpoint {} ({})", i, device),
+            filters.clone(),
+        ),
+    };
+    let stats = Arc::new(EndpointStats::new());
+    let ctx = EndpointSpawnContext {
+        id: i,
+        bus_tx: bus.sender(),
+        routing_table: routing_table.clone(),
+        route_update_tx: route_update_tx.clone(),
+        dedup: dedup.clone(),
+        filters,
+        stats: stats.clone(),
+        cancel_token: cancel_token.clone(),
+    };
+    (name, stats, ctx)
+}
 
 /// A spawned task tagged with a human-readable name.
 ///
@@ -146,36 +188,31 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
     if let Some(port) = config.general.tcp_port {
         let name = format!("Implicit TCP Server :{}", port);
         let stats = Arc::new(EndpointStats::new());
-        let bus_tx = bus.sender();
-        let rt = routing_table.clone();
-        let dd = dedup.clone();
         let id = config.endpoint.len();
-        let filters = EndpointFilters::default();
         let addr = format!("0.0.0.0:{}", port);
         let task_token = cancel_token.child_token();
 
         endpoint_stats.push((EndpointId(id), name.clone(), stats.clone()));
 
+        let ctx = EndpointSpawnContext {
+            id,
+            bus_tx: bus.sender(),
+            routing_table: routing_table.clone(),
+            route_update_tx: route_update_tx.clone(),
+            dedup: dedup.clone(),
+            filters: EndpointFilters::default(),
+            stats: stats.clone(),
+            cancel_token: task_token.clone(),
+        };
+
         let supervisor_name = name.clone();
-        let route_tx = route_update_tx.clone();
         tasks.push(NamedTask::new(
             name,
-            tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
-                let bus_tx = bus_tx.clone();
-                let bus_rx = bus_tx.subscribe();
-                let rt = rt.clone();
-                let dd = dd.clone();
-                let filters = filters.clone();
+            tokio::spawn(supervise(supervisor_name, task_token, move || {
+                let ctx = ctx.clone();
                 let addr = addr.clone();
-                let m = crate::config::EndpointMode::Server;
-                let token = task_token.clone();
-                let st = stats.clone();
-                let route_tx = route_tx.clone();
                 async move {
-                    crate::endpoints::tcp::run(
-                        id, addr, m, bus_tx, bus_rx, rt, route_tx, dd, filters, token, st,
-                    )
-                    .await
+                    crate::endpoints::tcp::run(ctx, addr, crate::config::EndpointMode::Server).await
                 }
             })),
         ));
@@ -210,96 +247,58 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
 
     // Spawn configured endpoints
     for (i, endpoint_config) in config.endpoint.iter().enumerate() {
-        let bus = bus.clone();
-        let bus_tx = bus.sender();
-        let routing_table = routing_table.clone();
-        let dedup = dedup.clone();
         let task_token = cancel_token.child_token();
 
-        match endpoint_config {
+        let (name, stats, ctx) = build_endpoint_context(
+            i,
+            endpoint_config,
+            &bus,
+            &routing_table,
+            &route_update_tx,
+            &dedup,
+            &task_token,
+        );
+        endpoint_stats.push((EndpointId(i), name.clone(), stats.clone()));
+
+        let task = match endpoint_config {
             EndpointConfig::Udp {
                 address,
                 mode,
-                filters,
                 broadcast_timeout_secs,
                 ..
             } => {
-                let name = format!("UDP Endpoint {} ({})", i, address);
-                let stats = Arc::new(EndpointStats::new());
-                endpoint_stats.push((EndpointId(i), name.clone(), stats.clone()));
                 let address = address.clone();
                 let mode = mode.clone();
-                let filters = filters.clone();
                 let cleanup_ttl = prune_ttl;
                 let bcast_timeout = *broadcast_timeout_secs;
-
                 let supervisor_name = name.clone();
-                let route_tx = route_update_tx.clone();
-                tasks.push(NamedTask::new(
-                    name,
-                    tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
-                        crate::endpoints::udp::run(
-                            i,
-                            address.clone(),
-                            mode.clone(),
-                            bus_tx.clone(),
-                            bus.subscribe(),
-                            routing_table.clone(),
-                            route_tx.clone(),
-                            dedup.clone(),
-                            filters.clone(),
-                            task_token.clone(),
-                            cleanup_ttl,
-                            bcast_timeout,
-                            stats.clone(),
-                        )
-                    })),
-                ));
+                tokio::spawn(supervise(supervisor_name, task_token, move || {
+                    let ctx = ctx.clone();
+                    let address = address.clone();
+                    let mode = mode.clone();
+                    async move {
+                        crate::endpoints::udp::run(ctx, address, mode, cleanup_ttl, bcast_timeout)
+                            .await
+                    }
+                }))
             }
-            EndpointConfig::Tcp {
-                address,
-                mode,
-                filters,
-                ..
-            } => {
-                let name = format!("TCP Endpoint {} ({})", i, address);
-                let stats = Arc::new(EndpointStats::new());
-                endpoint_stats.push((EndpointId(i), name.clone(), stats.clone()));
+            EndpointConfig::Tcp { address, mode, .. } => {
                 let address = address.clone();
                 let mode = mode.clone();
-                let filters = filters.clone();
-
                 let supervisor_name = name.clone();
-                let route_tx = route_update_tx.clone();
-                tasks.push(NamedTask::new(
-                    name,
-                    tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
-                        crate::endpoints::tcp::run(
-                            i,
-                            address.clone(),
-                            mode.clone(),
-                            bus_tx.clone(),
-                            bus.subscribe(),
-                            routing_table.clone(),
-                            route_tx.clone(),
-                            dedup.clone(),
-                            filters.clone(),
-                            task_token.clone(),
-                            stats.clone(),
-                        )
-                    })),
-                ));
+                tokio::spawn(supervise(supervisor_name, task_token, move || {
+                    let ctx = ctx.clone();
+                    let address = address.clone();
+                    let mode = mode.clone();
+                    async move { crate::endpoints::tcp::run(ctx, address, mode).await }
+                }))
             }
             EndpointConfig::Serial {
                 device,
                 baud,
                 flow_control,
-                filters,
                 ..
             } => {
-                let name = format!("Serial Endpoint {} ({})", i, device);
-                let stats = Arc::new(EndpointStats::new());
-                endpoint_stats.push((EndpointId(i), name.clone(), stats.clone()));
                 let device = device.clone();
                 let bauds: Vec<u32> = baud.rates().to_vec();
                 let baud_index = Arc::new(AtomicUsize::new(0));
@@ -308,35 +307,27 @@ pub fn spawn_all(config: &Config, cancel_token: &CancellationToken) -> Orchestra
                     crate::config::FlowControl::Hardware => tokio_serial::FlowControl::Hardware,
                     crate::config::FlowControl::Software => tokio_serial::FlowControl::Software,
                 };
-                let filters = filters.clone();
-
                 let supervisor_name = name.clone();
-                let route_tx = route_update_tx.clone();
-                tasks.push(NamedTask::new(
-                    name,
-                    tokio::spawn(supervise(supervisor_name, task_token.clone(), move || {
-                        let idx = baud_index.fetch_add(1, Ordering::Relaxed);
-                        // idx % bauds.len() is always in bounds; bauds is non-empty (validated by config)
-                        #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
-                        let current_baud = bauds[idx % bauds.len()];
+                tokio::spawn(supervise(supervisor_name, task_token, move || {
+                    let idx = baud_index.fetch_add(1, Ordering::Relaxed);
+                    // idx % bauds.len() is always in bounds; bauds is non-empty (validated by config)
+                    #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+                    let current_baud = bauds[idx % bauds.len()];
+                    let ctx = ctx.clone();
+                    let device = device.clone();
+                    async move {
                         crate::endpoints::serial::run(
-                            i,
-                            device.clone(),
+                            ctx,
+                            device,
                             current_baud,
                             serial_flow_control,
-                            bus_tx.clone(),
-                            bus.subscribe(),
-                            routing_table.clone(),
-                            route_tx.clone(),
-                            dedup.clone(),
-                            filters.clone(),
-                            task_token.clone(),
-                            stats.clone(),
                         )
-                    })),
-                ));
+                        .await
+                    }
+                }))
             }
-        }
+        };
+        tasks.push(NamedTask::new(name, task));
     }
     drop(route_update_tx);
 
