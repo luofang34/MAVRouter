@@ -15,16 +15,11 @@
 //! If the peer is silent for `broadcast_timeout_secs`, it reverts to broadcast.
 //! This allows GCS changes without reconfiguration.
 
-use crate::dedup::ConcurrentDedup;
-use crate::endpoint_core::{EndpointCore, EndpointStats};
+use crate::endpoint_core::{recv_next_bus_msg, EndpointSpawnContext};
 use crate::error::{Result, RouterError};
-use crate::filter::EndpointFilters;
 use crate::framing::MavlinkFrame;
-use crate::router::{EndpointId, RoutedMessage};
-use crate::routing::RoutingTable;
 use bytes::Bytes;
 use dashmap::DashMap;
-use tokio::sync::broadcast::{self, error::RecvError};
 // futures::join_all removed - sequential sends avoid Vec allocation (issue #17)
 use mavlink::MavlinkVersion;
 use parking_lot::Mutex;
@@ -34,7 +29,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 /// Returns the appropriate local bind address for a UDP client based on the target address family.
@@ -75,54 +69,37 @@ pub fn is_broadcast_addr(addr: &SocketAddr) -> bool {
 ///
 /// # Arguments
 ///
-/// * `id` - Unique identifier for this endpoint.
-/// * `address` - The UDP address to bind to (server) or send to (client), e.g., "0.0.0.0:14550" or "127.0.0.1:14550".
-/// * `mode` - The operating mode (`EndpointMode::Server` or `EndpointMode::Client`).
-/// * `bus_tx` - Sender half of the message bus for sending `RoutedMessage`s to other endpoints.
-/// * `bus_rx` - Receiver half of the message bus for receiving `RoutedMessage`s from other endpoints.
-/// * `routing_table` - Shared `RoutingTable` to update and query routing information.
-/// * `dedup` - Shared `Dedup` instance for message deduplication.
-/// * `filters` - `EndpointFilters` to apply for this specific endpoint.
-/// * `token` - `CancellationToken` to signal graceful shutdown.
+/// * `ctx` - Shared spawn context (bus, routing table, dedup, filters, stats,
+///   cancellation token).
+/// * `address` - The UDP address to bind to (server) or send to (client),
+///   e.g. `"0.0.0.0:14550"` or `"127.0.0.1:14550"`.
+/// * `mode` - The operating mode ([`crate::config::EndpointMode::Server`] or
+///   [`crate::config::EndpointMode::Client`]).
 /// * `cleanup_ttl_secs` - Time-to-live for stale client entries in server mode.
-/// * `broadcast_timeout_secs` - Timeout before reverting from unicast to broadcast in broadcast client mode.
+/// * `broadcast_timeout_secs` - Timeout before reverting from unicast to
+///   broadcast in broadcast client mode.
 ///
 /// # Returns
 ///
 /// A `Result` indicating success or failure. The function will run indefinitely
-/// until the `CancellationToken` is cancelled or a critical error occurs.
+/// until the cancellation token in `ctx` is cancelled or a critical error occurs.
 ///
 /// # Errors
 ///
 /// Returns a [`crate::error::RouterError`] if:
 /// - Binding to the specified address fails.
 /// - The remote address for client mode cannot be resolved.
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
-    id: usize,
+    ctx: EndpointSpawnContext,
     address: String,
     mode: crate::config::EndpointMode,
-    bus_tx: broadcast::Sender<Arc<RoutedMessage>>,
-    bus_rx: broadcast::Receiver<Arc<RoutedMessage>>,
-    routing_table: Arc<RoutingTable>,
-    route_update_tx: tokio::sync::mpsc::Sender<crate::routing::RouteUpdate>,
-    dedup: ConcurrentDedup,
-    filters: EndpointFilters,
-    token: CancellationToken,
     cleanup_ttl_secs: u64,
     broadcast_timeout_secs: u64,
-    stats: Arc<EndpointStats>,
 ) -> Result<()> {
-    let core = EndpointCore {
-        id: EndpointId(id),
-        bus_tx: bus_tx.clone(),
-        routing_table: routing_table.clone(),
-        route_update_tx: route_update_tx.clone(),
-        dedup: dedup.clone(),
-        filters: filters.clone(),
-        update_routing: true,
-        stats,
-    };
+    let id = ctx.id;
+    let token = ctx.cancel_token.clone();
+    let bus_rx = ctx.subscribe_bus();
+    let core = ctx.endpoint_core(true);
 
     let (bind_addr, target_addr) = if mode == crate::config::EndpointMode::Server {
         (address.clone(), None)
@@ -245,87 +222,77 @@ pub async fn run(
     let broadcast_peer_send = broadcast_peer.clone();
     let broadcast_timeout = Duration::from_secs(broadcast_timeout_secs);
 
+    let send_loop_name = format!("UDP Sender {}", id);
     let send_loop = async move {
         // Pre-allocated buffer for client addresses to avoid per-message allocation (issue #17)
         let mut targets: Vec<SocketAddr> = Vec::new();
 
         loop {
-            match bus_rx_loop.recv().await {
-                Ok(msg) => {
-                    if !core_tx.check_outgoing(&msg) {
-                        continue;
-                    }
+            // `recv_next_bus_msg` centralises the `Lagged`/`Closed` bookkeeping
+            // shared with every other transport's send loop — counting drops
+            // and continuing on `Lagged`, breaking on `Closed`.
+            let Some(msg) =
+                recv_next_bus_msg(&mut bus_rx_loop, &core_tx.stats, &send_loop_name).await
+            else {
+                break;
+            };
+            if !core_tx.check_outgoing(&msg) {
+                continue;
+            }
 
-                    let packet_data = msg.serialized_bytes.clone();
-                    #[allow(clippy::cast_possible_truncation)] // MAVLink frame fits u64
-                    let pkt_len = packet_data.len() as u64;
+            let packet_data = msg.serialized_bytes.clone();
+            #[allow(clippy::cast_possible_truncation)] // MAVLink frame fits u64
+            let pkt_len = packet_data.len() as u64;
 
-                    if let Some(target) = target_addr {
-                        if broadcast_mode {
-                            // Broadcast mode: check if we have an active unicast peer
-                            let send_addr = {
-                                let peer = broadcast_peer_send.lock();
-                                match &*peer {
-                                    Some((addr, last_seen))
-                                        if last_seen.elapsed() < broadcast_timeout =>
-                                    {
-                                        *addr
-                                    }
-                                    _ => target,
-                                }
-                            };
-                            match s_socket.send_to(&packet_data, send_addr).await {
-                                Ok(_) => {
-                                    core_tx.stats.record_outgoing(pkt_len);
-                                }
-                                Err(e) => {
-                                    core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
-                                    warn!("UDP send error to {}: {}", send_addr, e);
-                                }
+            if let Some(target) = target_addr {
+                if broadcast_mode {
+                    // Broadcast mode: check if we have an active unicast peer
+                    let send_addr = {
+                        let peer = broadcast_peer_send.lock();
+                        match &*peer {
+                            Some((addr, last_seen)) if last_seen.elapsed() < broadcast_timeout => {
+                                *addr
                             }
-                        } else {
-                            // Normal client mode: always send to target
-                            match s_socket.send_to(&packet_data, target).await {
-                                Ok(_) => {
-                                    core_tx.stats.record_outgoing(pkt_len);
-                                }
-                                Err(e) => {
-                                    core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
-                                    warn!("UDP send error to target: {}", e);
-                                }
-                            }
+                            _ => target,
                         }
-                    } else {
-                        // Collect keys first (releases DashMap shard locks before await)
-                        targets.clear();
-                        targets.extend(clients_send.iter().map(|r| *r.key()));
-
-                        for target in &targets {
-                            match s_socket.send_to(&packet_data, target).await {
-                                Ok(_) => {
-                                    core_tx.stats.record_outgoing(pkt_len);
-                                }
-                                Err(e) => {
-                                    core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
-                                    warn!("UDP broadcast error to {}: {}", target, e);
-                                }
-                            }
+                    };
+                    match s_socket.send_to(&packet_data, send_addr).await {
+                        Ok(_) => {
+                            core_tx.stats.record_outgoing(pkt_len);
+                        }
+                        Err(e) => {
+                            core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                            warn!("UDP send error to {}: {}", send_addr, e);
+                        }
+                    }
+                } else {
+                    // Normal client mode: always send to target
+                    match s_socket.send_to(&packet_data, target).await {
+                        Ok(_) => {
+                            core_tx.stats.record_outgoing(pkt_len);
+                        }
+                        Err(e) => {
+                            core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                            warn!("UDP send error to target: {}", e);
                         }
                     }
                 }
-                Err(RecvError::Lagged(n)) => {
-                    // Dropping bus messages is a correctness signal, not
-                    // noise — count it and emit at error! so the stats
-                    // pipeline and operators both see it (matches the
-                    // convention established in endpoint_core::stream_loop).
-                    core_tx.stats.bus_lagged.fetch_add(n, Ordering::Relaxed);
-                    error!(
-                        "UDP Sender bus receiver lagged: dropped {} messages (bus_lagged now {})",
-                        n,
-                        core_tx.stats.bus_lagged.load(Ordering::Relaxed)
-                    );
+            } else {
+                // Collect keys first (releases DashMap shard locks before await)
+                targets.clear();
+                targets.extend(clients_send.iter().map(|r| *r.key()));
+
+                for target in &targets {
+                    match s_socket.send_to(&packet_data, target).await {
+                        Ok(_) => {
+                            core_tx.stats.record_outgoing(pkt_len);
+                        }
+                        Err(e) => {
+                            core_tx.stats.errors.fetch_add(1, Ordering::Relaxed);
+                            warn!("UDP broadcast error to {}: {}", target, e);
+                        }
+                    }
                 }
-                Err(RecvError::Closed) => break,
             }
         }
     };

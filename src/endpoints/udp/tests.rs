@@ -194,40 +194,56 @@ async fn udp_sender_counts_lagged_from_bus() {
     let cancel = CancellationToken::new();
 
     let bus_tx = bus.sender();
-    // Subscribe BEFORE flooding — broadcast receivers anchor their cursor
-    // at subscribe time, so sends after this point will overflow past the
-    // receiver and produce a single `Lagged(n)` on its first `recv()`.
-    let bus_rx = bus.subscribe();
 
-    const FLOOD_COUNT: usize = 1000;
-    // source_id differs from the endpoint id below, so messages aren't
-    // self-filtered by EndpointCore::check_outgoing.
-    let template = build_test_frame(EndpointId(99));
-    for _ in 0..FLOOD_COUNT {
-        bus.tx.send(Arc::new(template.clone())).ok();
-    }
     let endpoint_stats = stats.clone();
     let endpoint_cancel = cancel.clone();
     let endpoint_routing = routing_table.clone();
     let endpoint_dedup = ConcurrentDedup::new(Duration::from_millis(100));
+    let ctx = crate::endpoint_core::EndpointSpawnContext {
+        id: 0,
+        bus_tx: bus_tx.clone(),
+        routing_table: endpoint_routing,
+        route_update_tx: route_tx,
+        dedup: endpoint_dedup,
+        filters: EndpointFilters::default(),
+        stats: endpoint_stats,
+        cancel_token: endpoint_cancel,
+    };
     let handle = tokio::spawn(async move {
         run(
-            0,
+            ctx,
             "127.0.0.1:0".to_string(),
             crate::config::EndpointMode::Server,
-            bus_tx,
-            bus_rx,
-            endpoint_routing,
-            route_tx,
-            endpoint_dedup,
-            EndpointFilters::default(),
-            endpoint_cancel,
             60,
             60,
-            endpoint_stats,
         )
         .await
     });
+
+    // The send loop subscribes its own receiver inside `udp::run` via
+    // `ctx.subscribe_bus()`. Wait for that subscription to land — broadcast
+    // receivers anchor their cursor at subscribe time, so we MUST anchor
+    // before the flood, otherwise the receiver's cursor starts at the
+    // post-flood tail and `Lagged` never fires. Synchronise on
+    // `receiver_count` rather than a sleep — see CLAUDE.md (no sleep+retry).
+    let sub_deadline = Instant::now() + Duration::from_secs(2);
+    while bus_tx.receiver_count() == 0 && Instant::now() < sub_deadline {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        bus_tx.receiver_count() >= 1,
+        "udp::run never subscribed its bus receiver within 2s"
+    );
+
+    const FLOOD_COUNT: usize = 1000;
+    // source_id differs from the endpoint id below, so messages aren't
+    // self-filtered by EndpointCore::check_outgoing. The flood is a tight
+    // sync loop — no awaits between sends — so the broadcast buffer
+    // overwrites the receiver's cursor before it gets scheduled to poll.
+    let template = build_test_frame(EndpointId(99));
+    for _ in 0..FLOOD_COUNT {
+        bus.tx.send(Arc::new(template.clone())).ok();
+    }
 
     // Poll until the counter reflects the lag.
     let deadline = Instant::now() + Duration::from_secs(3);
