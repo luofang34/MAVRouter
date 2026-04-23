@@ -1,8 +1,30 @@
 //! [`RoutingTable`]: the public face of the routing system.
 //!
 //! Wraps `SHARD_COUNT` [`super::shard::Shard`]s plus a single
-//! [`super::groups::GroupConfig`]; all interior mutability lives in those
-//! sub-types' `RwLock`s, so every method here takes `&self`.
+//! [`super::groups::GroupConfig`] snapshot. Shards are guarded by
+//! `parking_lot::RwLock` (short, sharded, read-hot) and the group config
+//! is held in an [`arc_swap::ArcSwap`] so reads are lock-free atomic
+//! loads — crucial for hot ingress / egress paths that must not park a
+//! tokio worker on a contended `RwLock`.
+//!
+//! # Lock discipline (hot path)
+//!
+//! The hot egress path ([`RoutingTable::should_send`]) MUST NOT hold two
+//! synchronisation primitives simultaneously, and MUST NOT hold the
+//! group-config across a shard acquisition — the old code did both, which
+//! (a) risked parking a tokio worker behind the single global
+//! `RwLock<GroupConfig>` under contention and (b) introduced an inverted
+//! lock ordering against [`RoutingTable::is_sniffer_endpoint`] that would
+//! have latched into a deadlock the moment group-config became contended.
+//! The discipline we enforce now:
+//!
+//! 1. **Snapshot** the group config first with `ArcSwap::load` — lock-free.
+//! 2. **Then** acquire at most one shard read lock and do all shard work.
+//! 3. **Never** re-acquire the config after touching shards.
+//!
+//! `load()` returns a short-lived `Guard` that owns an `Arc`; holding it
+//! across a shard `.read()` is fine because it is *not* a lock — there's
+//! no contention, no parking.
 //!
 //! # Routing-table mutation model
 //!
@@ -10,7 +32,10 @@
 //! is needed). New observations are submitted as
 //! [`super::update::RouteUpdate`]s through the routing-update channel and
 //! applied by the dedicated routing-updater task; the hot path therefore
-//! never blocks a tokio worker on a write lock.
+//! never blocks a tokio worker on a write lock. Group-config writes
+//! (`set_endpoint_group`, `set_sniffer_sysids`) are copy-on-write: load
+//! the current snapshot, mutate a clone, `store` the new Arc. Writes are
+//! rare (called at startup for group registration and sniffer setup).
 
 use super::groups::GroupConfig;
 use super::shard::{
@@ -19,7 +44,9 @@ use super::shard::{
 };
 use super::stats::RoutingStats;
 use crate::router::EndpointId;
+use arc_swap::ArcSwap;
 use parking_lot::RwLock;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -29,11 +56,17 @@ use tracing::warn;
 /// expiration to handle dynamic topologies. Internally sharded by
 /// `system_id` so concurrent reads for different sysids don't contend, and
 /// the writer task can mutate one shard without stalling readers on the
-/// other 15. All public methods take `&self` — the per-shard `RwLock`s
+/// other 15. The group-config (endpoint groups + sniffer sysids) is held
+/// in an [`ArcSwap`] so hot-path reads never take a lock. All public
+/// methods take `&self`; the per-shard `RwLock`s and the `ArcSwap`
 /// provide interior mutability.
 pub struct RoutingTable {
     shards: [RwLock<Shard>; SHARD_COUNT],
-    config: RwLock<GroupConfig>,
+    /// Group / sniffer configuration. Held behind [`ArcSwap`] rather than
+    /// a `RwLock` so the hot path takes a lock-free atomic load instead
+    /// of parking a tokio worker thread on a contended lock. Writes are
+    /// copy-on-write via [`ArcSwap::rcu`] or load/clone/store.
+    config: ArcSwap<GroupConfig>,
 }
 
 impl Default for RoutingTable {
@@ -47,7 +80,7 @@ impl RoutingTable {
     pub fn new() -> Self {
         Self {
             shards: std::array::from_fn(|_| RwLock::new(Shard::default())),
-            config: RwLock::new(GroupConfig::default()),
+            config: ArcSwap::from_pointee(GroupConfig::default()),
         }
     }
 
@@ -60,35 +93,51 @@ impl RoutingTable {
         &self.shards[(sys_id as usize) & SHARD_MASK]
     }
 
+    /// Copy-on-write mutation of the group config. Loads the current
+    /// snapshot, hands a mutable clone to `edit`, and atomically
+    /// publishes the new snapshot. Writers never block readers.
+    fn rcu_config<F: FnMut(&mut GroupConfig)>(&self, mut edit: F) {
+        // `rcu` re-runs `edit` on a fresh snapshot if a concurrent writer
+        // raced us; concurrent writers are rare (startup only) so the
+        // retry cost is negligible.
+        self.config.rcu(|current| {
+            let mut next = GroupConfig::clone(current);
+            edit(&mut next);
+            Arc::new(next)
+        });
+    }
+
     /// Registers an endpoint as belonging to a named group.
     ///
     /// Endpoints in the same group share routing knowledge, allowing
     /// redundant physical links to the same system to both forward traffic.
     pub fn set_endpoint_group(&self, id: EndpointId, group: String) {
-        let mut cfg = self.config.write();
-        cfg.endpoint_groups.insert(id, group.clone());
-        cfg.group_members.entry(group).or_default().insert(id);
+        self.rcu_config(|cfg| {
+            cfg.endpoint_groups.insert(id, group.clone());
+            cfg.group_members
+                .entry(group.clone())
+                .or_default()
+                .insert(id);
+        });
     }
 
     /// Sets the system IDs that trigger sniffer mode.
     pub fn set_sniffer_sysids(&self, sysids: &[u8]) {
-        self.config.write().sniffer_sysids = sysids.iter().copied().collect();
+        let new: super::shard::HashSet<u8> = sysids.iter().copied().collect();
+        self.rcu_config(|cfg| cfg.sniffer_sysids = new.clone());
     }
 
     /// Checks if this endpoint should receive all traffic due to sniffer mode.
     /// Returns true if any sniffer system ID has been seen on this endpoint.
     pub fn is_sniffer_endpoint(&self, endpoint_id: EndpointId) -> bool {
-        // Snapshot the sniffer set first so we don't hold `config`'s lock
-        // across shard lookups (and to keep the hot path lock-order
-        // consistent: config before shard, never the other way round).
-        let sniffers: Vec<u8> = {
-            let cfg = self.config.read();
-            if cfg.sniffer_sysids.is_empty() {
-                return false;
-            }
-            cfg.sniffer_sysids.iter().copied().collect()
-        };
-        for sysid in sniffers {
+        // Lock-free snapshot of the group config — `ArcSwap::load` is an
+        // atomic pointer load, not a lock acquisition. Safe to hold
+        // across shard reads because it can never park a tokio worker.
+        let cfg = self.config.load();
+        if cfg.sniffer_sysids.is_empty() {
+            return false;
+        }
+        for &sysid in cfg.sniffer_sysids.iter() {
             let shard = self.shard_for(sysid).read();
             if let Some(entry) = shard.sys_routes.get(&sysid) {
                 if entry.endpoints.contains(&endpoint_id) {
@@ -209,7 +258,11 @@ impl RoutingTable {
     /// Determines if a message targeting `(target_sysid, target_compid)`
     /// should be sent to a particular `endpoint_id`.
     ///
-    /// See the routing policy description at the module level for semantics.
+    /// See the routing policy description at the module level for
+    /// semantics. Hot-path: the group-config snapshot is taken via a
+    /// lock-free [`ArcSwap::load`] BEFORE any shard read, so we never
+    /// hold two synchronisation primitives simultaneously on the
+    /// egress path.
     pub fn should_send(
         &self,
         endpoint_id: EndpointId,
@@ -224,8 +277,12 @@ impl RoutingTable {
             return true;
         }
 
+        // Snapshot the group-config lock-free BEFORE touching any shard.
+        // Holding `cfg` across the shard read is fine: `ArcSwap::load`
+        // returns a refcount-guarded `Arc` view, not a lock, so it can
+        // never park a tokio worker or participate in a lock cycle.
+        let cfg = self.config.load();
         let shard = self.shard_for(target_sysid).read();
-        let cfg = self.config.read();
 
         let Some(entry) = shard.sys_routes.get(&target_sysid) else {
             return false;

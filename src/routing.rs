@@ -7,20 +7,18 @@
 //! - [`RoutingTable`] — the routing table itself (interior mutability via
 //!   per-shard `RwLock`s).
 //! - [`RoutingStats`] — point-in-time snapshot for the metrics pipeline.
-//! - [`RouteUpdate`] — hot-path observation queued by endpoints for the
+//! - `RouteUpdate` — hot-path observation queued by endpoints for the
 //!   dedicated routing-updater task.
 //!
 //! Internal layout follows the `foo.rs` + `foo/` convention required by the
 //! crate (no `mod.rs`):
 //!
-//! - [`table`] — [`RoutingTable`] struct and its `impl`.
-//! - [`shard`] — per-`system_id` shard (constants, `Shard`, `RouteEntry`,
+//! - `table` — [`RoutingTable`] struct and its `impl`.
+//! - `shard` — per-`system_id` shard (constants, `Shard`, `RouteEntry`,
 //!   prune/eviction helpers).
-//! - [`groups`] — endpoint-group / sniffer-sysid policy
-//!   (renamed from the earlier `Config` to avoid collision with
-//!   [`crate::config::Config`]).
-//! - [`stats`] — [`RoutingStats`] snapshot type.
-//! - [`update`] — [`RouteUpdate`] hot-path message.
+//! - `groups` — endpoint-group / sniffer-sysid policy.
+//! - `stats` — [`RoutingStats`] snapshot type.
+//! - `update` — `RouteUpdate` hot-path message.
 //!
 //! # Routing-table mutation model
 //!

@@ -4,16 +4,19 @@
 //! [`crate::config::Config`]); now [`GroupConfig`] makes the intent —
 //! "routing-side group / sniffer policy" — explicit at the use site.
 //!
-//! Held under a single `RwLock` because almost every field is written
-//! once at startup and read rarely; sharding wouldn't repay its overhead.
+//! Held behind [`arc_swap::ArcSwap`] in [`super::table::RoutingTable`] so
+//! hot-path reads are a lock-free atomic pointer load. Writes are rare
+//! (called at startup via `set_endpoint_group` / `set_sniffer_sysids`)
+//! and use copy-on-write: load the current snapshot, clone, mutate,
+//! publish — hence the `Clone` derive here is load-bearing.
 
 use super::shard::{HashMap, HashSet};
 use crate::router::EndpointId;
 
-/// Group / sniffer configuration. Mostly written once at startup and read
-/// (rarely) on the hot path; held behind a single `RwLock` because
-/// sharding it by anything meaningful would cost more than it saves.
-#[derive(Default)]
+/// Group / sniffer configuration. Written rarely (startup), read on the
+/// hot path. Kept Clone-able so [`super::table::RoutingTable`] can
+/// copy-on-write through `ArcSwap` without ever blocking a reader.
+#[derive(Default, Clone)]
 pub(super) struct GroupConfig {
     /// Map of endpoint ID to its group name (if any).
     pub(super) endpoint_groups: HashMap<EndpointId, String>,
