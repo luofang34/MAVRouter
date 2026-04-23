@@ -14,7 +14,7 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Cargo Check
         run: cargo check --verbose
@@ -23,7 +23,7 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -34,7 +34,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -45,7 +45,7 @@ jobs:
     name: Size Budget
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -75,7 +75,7 @@ jobs:
     name: Test (Release)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Run tests in release mode
         run: cargo test --release --verbose
@@ -87,7 +87,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Run tests
         run: cargo test --all-targets
@@ -96,7 +96,7 @@ jobs:
     name: Documentation Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Check docs build
         run: cargo doc --no-deps --all-features
@@ -110,7 +110,7 @@ jobs:
     name: Markdown Link Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # `lychee` catches broken http(s) links in README, CHANGELOG, and any
       # other markdown file. Intra-doc links inside the Rust source are
       # covered separately by the `docs-check` job above.
@@ -137,7 +137,7 @@ jobs:
     name: Benchmark
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       # Benches microbenchmark internal algorithms that aren't part of the
       # public API, so they require the dev-only `_internal` feature which
@@ -154,7 +154,7 @@ jobs:
           cargo bench --features _internal --bench routing_contention_bench -- --test
           cargo bench --features _internal --bench pipeline_benchmark -- --test
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-results
           path: target/criterion/
@@ -163,10 +163,10 @@ jobs:
     name: Python Integration Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Install Python dependencies
@@ -238,7 +238,7 @@ jobs:
         continue-on-error: false
       - name: Upload router logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: router-logs
           path: |
@@ -249,7 +249,7 @@ jobs:
     name: Code Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-tarpaulin
         uses: taiki-e/install-action@cargo-tarpaulin
@@ -266,7 +266,7 @@ jobs:
           fi
           echo "✅ Coverage $COVERAGE% meets minimum requirement"
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
