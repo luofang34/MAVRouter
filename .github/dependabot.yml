@@ -1,0 +1,26 @@
+# Keep third-party GitHub Actions current so runtime deprecations
+# (e.g. Node 20 → Node 24) surface as reviewable PRs instead of as
+# silent warnings in CI run logs.
+#
+# Cargo deps are intentionally NOT enabled here: Rust upgrades in this
+# crate gate on test / bench / MSRV review and are handled by hand.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      # Batch all action bumps into one PR per week — reviewing a single
+      # PR with N version bumps is cheaper than N PRs that each need a
+      # full CI run.
+      actions:
+        patterns:
+          - "*"

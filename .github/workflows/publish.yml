@@ -22,6 +22,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # Opt every JavaScript-based action in this workflow onto the Node 24
+  # runtime. See the equivalent block in ci.yml for context — same reason,
+  # same expiry (no-op once Node 24 is the GitHub Actions default).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   publish:
     name: >-

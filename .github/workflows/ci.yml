@@ -7,6 +7,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Opt every JavaScript-based action in this workflow onto the Node 24
+  # runtime. GitHub flips Node 24 to the default on 2026-06-02 and removes
+  # Node 20 on 2026-09-16; setting this now silences the deprecation
+  # warning emitted by actions still shipping a Node 20 entrypoint
+  # (actions/checkout@v4, rust-lang/crates-io-auth-action@v1, etc.) and
+  # becomes a no-op once Node 24 is the default.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   check:
