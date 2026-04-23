@@ -1,5 +1,13 @@
 name: Publish
 
+# Label runs so dry-runs are visually distinct from real publishes in the
+# Actions UI. `inputs.*` is only defined for workflow_dispatch, so the push
+# branch evaluates the format() call with ref_name (e.g. "v0.1.6").
+run-name: >-
+  ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run)
+      && 'Publish — DRY RUN'
+      || format('Publish {0}', github.ref_name) }}
+
 on:
   push:
     tags:
@@ -16,7 +24,10 @@ permissions:
 
 jobs:
   publish:
-    name: Publish to crates.io
+    name: >-
+      ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run)
+          && 'Dry-run to crates.io'
+          || 'Publish to crates.io' }}
     runs-on: ubuntu-latest
     # Must match the environment configured on crates.io under
     # Settings → Trusted Publishing for this crate. Gate reviewers /
