@@ -192,7 +192,8 @@ impl Dedup {
         let next = self.current_bucket.wrapping_add(1) % self.num_buckets;
         self.current_bucket = next;
 
-        // Clear the new current bucket (which was previously the oldest)
+        // Clear stale entries — without this, the ring would dedup fresh
+        // traffic against entries left over from the prior rotation cycle.
         if let Some(bucket) = self.buckets.get_mut(self.current_bucket) {
             bucket.clear();
         }
