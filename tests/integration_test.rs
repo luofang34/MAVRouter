@@ -4,12 +4,46 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::indexing_slicing)]
+#![allow(clippy::panic)]
+#![allow(clippy::arithmetic_side_effects)]
 
 use mavlink::MavHeader;
-use mavrouter::Router;
-use std::time::Duration;
+use mavrouter::{MessageBus, Router};
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
+
+/// Wait until the router's bus has at least `want` subscribers.
+/// Replaces blind `tokio::time::sleep` per CLAUDE.md "synchronize with
+/// events, not sleep" — `receiver_count()` is the concrete observable.
+async fn wait_for_bus_subscribers(bus: &MessageBus, want: usize, budget: Duration) {
+    let deadline = Instant::now() + budget;
+    while bus.tx.receiver_count() < want {
+        if Instant::now() >= deadline {
+            panic!(
+                "only {} bus subscribers after {:?}; expected at least {}",
+                bus.tx.receiver_count(),
+                budget,
+                want,
+            );
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Connect to a TCP server, retrying until the listener is ready.
+/// Closes the bind/release race that the helper's port-reservation
+/// pattern leaves open.
+async fn connect_tcp_with_retry(addr: &str, budget: Duration) -> TcpStream {
+    let deadline = Instant::now() + budget;
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(s) => return s,
+            Err(_) if Instant::now() < deadline => tokio::task::yield_now().await,
+            Err(e) => panic!("router tcp endpoint never became connectable at {addr}: {e}"),
+        }
+    }
+}
 
 /// Reserve `n` ephemeral TCP ports by binding temporary listeners on
 /// 127.0.0.1:0, reading back the kernel-assigned ports, then dropping
@@ -74,17 +108,19 @@ mode = "server"
 
     let router = Router::from_str(&toml).await.expect("router should start");
 
-    // Let both endpoints bind.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // UDP-server subscribes on spawn. TCP-server only adds subscribers per
+    // accepted client; its listener-ready signal is the connect_tcp_with_retry
+    // call below.
+    wait_for_bus_subscribers(router.bus(), 1, Duration::from_secs(5)).await;
 
     let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     udp.connect(format!("127.0.0.1:{udp_port}")).await.unwrap();
-    let mut tcp = TcpStream::connect(format!("127.0.0.1:{tcp_port}"))
-        .await
-        .unwrap();
+    let mut tcp =
+        connect_tcp_with_retry(&format!("127.0.0.1:{tcp_port}"), Duration::from_secs(5)).await;
 
-    // Give the TCP client time to land in the broadcast subscriber list.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Post-accept: TCP-server forks a per-client subscriber. UDP-server (1) +
+    // TCP per-client (1) = 2.
+    wait_for_bus_subscribers(router.bus(), 2, Duration::from_secs(5)).await;
 
     let buf = heartbeat_bytes();
     let mut rx = [0u8; 1024];
@@ -133,16 +169,13 @@ mode = "server"
 
     let router = Router::from_str(&toml).await.expect("router should start");
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut client1 =
+        connect_tcp_with_retry(&format!("127.0.0.1:{port_a}"), Duration::from_secs(5)).await;
+    let mut client2 =
+        connect_tcp_with_retry(&format!("127.0.0.1:{port_b}"), Duration::from_secs(5)).await;
 
-    let mut client1 = TcpStream::connect(format!("127.0.0.1:{port_a}"))
-        .await
-        .unwrap();
-    let mut client2 = TcpStream::connect(format!("127.0.0.1:{port_b}"))
-        .await
-        .unwrap();
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Both TCP-server endpoints fork a per-client subscriber on accept.
+    wait_for_bus_subscribers(router.bus(), 2, Duration::from_secs(5)).await;
 
     let buf = heartbeat_bytes();
     let mut rx = [0u8; 1024];
