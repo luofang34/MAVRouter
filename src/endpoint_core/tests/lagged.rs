@@ -5,7 +5,7 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use super::super::*;
-use super::make_core;
+use super::helpers::make_core;
 use crate::filter::EndpointFilters;
 use crate::router::{create_bus, EndpointId, RoutedMessage};
 use crate::routing::RoutingTable;
