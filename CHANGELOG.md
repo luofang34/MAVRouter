@@ -53,8 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `config.rs` split into per-concern submodules (`general`, `endpoint`,
   `defaults`, `merge`, `validate`, plus a tests subtree). No file in the
   crate exceeds the 500-line budget.
-- **MSRV bumped 1.70 → 1.75** to enable async-fn-in-trait for the extracted
-  `SignalSource` seam.
+- **MSRV bumped 1.70 → 1.81.** Initial bump was to 1.75 (async-fn-in-trait
+  for the extracted `SignalSource` seam); refined to 1.81 to match the
+  committed `Cargo.lock`'s v4 format, which 1.75's cargo cannot read. The
+  MSRV verification job (`cargo check --all-targets --locked` on
+  `dtolnay/rust-toolchain@1.81`) gates the floor on every PR.
 - `routing.rs` God-Module split into per-concern submodules (`table`,
   `shard`, `groups`, `stats`, `update`). The hot egress path now snapshots
   the group config lock-free via `ArcSwap` and never holds two locks
