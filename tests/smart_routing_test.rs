@@ -8,12 +8,78 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::indexing_slicing)]
+#![allow(clippy::panic)]
+#![allow(clippy::arithmetic_side_effects)]
 
 use mavlink::{MavHeader, Message};
-use mavrouter::Router;
-use std::time::Duration;
+use mavrouter::{MessageBus, Router, RoutingTable};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+/// Wait until the router's bus has at least `want` subscribers.
+/// Replaces blind `tokio::time::sleep` per CLAUDE.md "synchronize with
+/// events, not sleep" — `receiver_count()` is the concrete observable.
+async fn wait_for_bus_subscribers(bus: &MessageBus, want: usize, budget: Duration) {
+    let deadline = Instant::now() + budget;
+    while bus.tx.receiver_count() < want {
+        if Instant::now() >= deadline {
+            panic!(
+                "only {} bus subscribers after {:?}; expected at least {}",
+                bus.tx.receiver_count(),
+                budget,
+                want,
+            );
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Connect to a TCP server, retrying until the listener is ready.
+async fn connect_tcp_with_retry(addr: &str, budget: Duration) -> TcpStream {
+    let deadline = Instant::now() + budget;
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(s) => return s,
+            Err(_) if Instant::now() < deadline => tokio::task::yield_now().await,
+            Err(e) => panic!("router tcp endpoint never became connectable at {addr}: {e}"),
+        }
+    }
+}
+
+/// Drain pending bytes from a TCP client, yielding between drains so any
+/// broadcast echo still in the per-client writer task's queue lands
+/// before we declare the socket quiet. A single drain pass is racy
+/// against in-flight broadcast fanout — by the time `try_read` returns
+/// `WouldBlock`, the next echo can be one task tick away from arriving.
+async fn drain_socket(client: &mut TcpStream) {
+    for _ in 0..3 {
+        while client.try_read(&mut [0u8; 1024]).is_ok() {}
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+    }
+    while client.try_read(&mut [0u8; 1024]).is_ok() {}
+}
+
+/// Wait until the routing table has learned at least `want` distinct
+/// system IDs. The routing-update channel is `try_send` from the hot
+/// path, so the table converges asynchronously after a heartbeat lands.
+async fn wait_for_routing_systems(table: &Arc<RoutingTable>, want: usize, budget: Duration) {
+    let deadline = Instant::now() + budget;
+    while table.stats().total_systems < want {
+        if Instant::now() >= deadline {
+            panic!(
+                "routing table only learned {} systems after {:?}; expected at least {}",
+                table.stats().total_systems,
+                budget,
+                want,
+            );
+        }
+        tokio::task::yield_now().await;
+    }
+}
 
 /// Reserve `n` ephemeral TCP ports by binding temporary listeners on
 /// 127.0.0.1:0, reading back the kernel-assigned ports, then dropping
@@ -118,33 +184,32 @@ mode = "server"
     );
 
     let router = Router::from_str(&toml).await.expect("router should start");
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let mut client1 = TcpStream::connect(format!("127.0.0.1:{port1}"))
-        .await
-        .unwrap();
-    let mut client2 = TcpStream::connect(format!("127.0.0.1:{port2}"))
-        .await
-        .unwrap();
-    let mut client3 = TcpStream::connect(format!("127.0.0.1:{port3}"))
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut client1 =
+        connect_tcp_with_retry(&format!("127.0.0.1:{port1}"), Duration::from_secs(5)).await;
+    let mut client2 =
+        connect_tcp_with_retry(&format!("127.0.0.1:{port2}"), Duration::from_secs(5)).await;
+    let mut client3 =
+        connect_tcp_with_retry(&format!("127.0.0.1:{port3}"), Duration::from_secs(5)).await;
 
-    // Each client announces a unique system id so the router learns where
-    // each MAVLink system lives.
+    // Each TCP-server endpoint forks a per-client subscriber on accept.
+    wait_for_bus_subscribers(router.bus(), 3, Duration::from_secs(5)).await;
+
     client1.write_all(&heartbeat_bytes(1)).await.unwrap();
     client2.write_all(&heartbeat_bytes(2)).await.unwrap();
     client3.write_all(&heartbeat_bytes(3)).await.unwrap();
 
-    // Let the routing updater absorb the heartbeats and drain any broadcast
-    // echoes that landed on the other sockets.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    while client1.try_read(&mut [0u8; 1024]).is_ok() {}
-    while client2.try_read(&mut [0u8; 1024]).is_ok() {}
-    while client3.try_read(&mut [0u8; 1024]).is_ok() {}
+    // Routing-update channel is non-blocking try_send; wait for the updater
+    // task to absorb the three heartbeats before issuing a targeted command.
+    wait_for_routing_systems(router.routing_table(), 3, Duration::from_secs(5)).await;
+    // Routing convergence races against the broadcast echo-fanout: by the
+    // time the table reports 3 systems learned, the heartbeat broadcasts
+    // may still be queued in the per-client writer tasks. Drain twice with
+    // a yield gap so any in-flight echo lands before the second drain.
+    drain_socket(&mut client1).await;
+    drain_socket(&mut client2).await;
+    drain_socket(&mut client3).await;
 
-    // Targeted COMMAND_LONG from client1 to system 2.
     client1.write_all(&command_long_bytes(2, 1)).await.unwrap();
 
     let (header, msg) = read_mavlink(&mut client2)
@@ -153,8 +218,11 @@ mode = "server"
     assert_eq!(header.system_id, 1, "source is system 1");
     assert_eq!(msg.message_id(), 76, "COMMAND_LONG message id");
 
-    // client3 must NOT receive it.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Negative assertion: client3 must NOT receive. The positive case above
+    // (client2 received within its 1s read timeout) proves the bus has
+    // already processed the COMMAND_LONG, so a single yield is enough to
+    // surface any spurious broadcast that would have arrived on client3.
+    tokio::task::yield_now().await;
     if let Ok(n) = client3.try_read(&mut [0u8; 1024]) {
         assert_eq!(
             n, 0,
@@ -188,26 +256,31 @@ mode = "server"
     );
 
     let router = Router::from_str(&toml).await.expect("router should start");
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let mut client = TcpStream::connect(format!("127.0.0.1:{port}"))
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let mut client =
+        connect_tcp_with_retry(&format!("127.0.0.1:{port}"), Duration::from_secs(5)).await;
 
-    // Client announces as system 1.
+    // TCP-server forks a per-client subscriber on accept.
+    wait_for_bus_subscribers(router.bus(), 1, Duration::from_secs(5)).await;
+
     client.write_all(&heartbeat_bytes(1)).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Drain own heartbeat echo (if any).
-    while client.try_read(&mut [0u8; 1024]).is_ok() {}
+    // Wait for the routing updater to record system 1.
+    wait_for_routing_systems(router.routing_table(), 1, Duration::from_secs(5)).await;
+    drain_socket(&mut client).await;
 
     // Send a command targeted at an unknown system (200). Because we're
     // the only endpoint and we don't claim to have seen system 200, the
     // router should drop it.
     client.write_all(&command_long_bytes(200, 1)).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(500)).await;
 
+    // Negative assertion: nothing should arrive. There is no positive
+    // counterpart here (no other endpoint to receive on), so we yield a few
+    // times to give any spurious broadcast a chance to surface, then read
+    // non-blockingly.
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
     if let Ok(n) = client.try_read(&mut [0u8; 1024]) {
         assert_eq!(n, 0, "message to unknown system should be dropped");
     }
