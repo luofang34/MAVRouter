@@ -201,6 +201,31 @@ impl Router {
 mod tests {
     use super::*;
 
+    fn claim_udp_port() -> u16 {
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve udp port");
+        sock.local_addr().expect("local_addr").port()
+    }
+
+    fn claim_udp_port_pair() -> (u16, u16) {
+        let a = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve udp port");
+        let b = std::net::UdpSocket::bind("127.0.0.1:0").expect("reserve udp port");
+        let pa = a.local_addr().expect("local_addr").port();
+        let pb = b.local_addr().expect("local_addr").port();
+        drop((a, b));
+        (pa, pb)
+    }
+
+    fn udp_server_toml(port: u16) -> String {
+        format!(
+            r#"
+[[endpoint]]
+type = "udp"
+address = "127.0.0.1:{port}"
+mode = "server"
+"#
+        )
+    }
+
     #[tokio::test]
     async fn test_router_from_str_no_endpoints() {
         let result = Router::from_str("").await;
@@ -209,46 +234,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_router_start_and_stop() {
-        let toml = r#"
-[[endpoint]]
-type = "udp"
-address = "127.0.0.1:24550"
-mode = "server"
-"#;
-        let router = Router::from_str(toml).await.expect("should start");
+        let port = claim_udp_port();
+        let router = Router::from_str(&udp_server_toml(port))
+            .await
+            .expect("should start");
         assert!(router.is_running());
         router.stop().await;
     }
 
     #[tokio::test]
     async fn test_router_bus_access() {
-        let toml = r#"
-[[endpoint]]
-type = "udp"
-address = "127.0.0.1:24551"
-mode = "server"
-"#;
-        let router = Router::from_str(toml).await.expect("should start");
+        let port = claim_udp_port();
+        let router = Router::from_str(&udp_server_toml(port))
+            .await
+            .expect("should start");
         let _subscriber = router.bus().subscribe();
         router.stop().await;
     }
 
     #[tokio::test]
     async fn test_router_endpoint_stats() {
-        let toml = r#"
+        let (a, b) = claim_udp_port_pair();
+        let toml = format!(
+            r#"
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:24560"
+address = "127.0.0.1:{a}"
 mode = "server"
 
 [[endpoint]]
 type = "udp"
-address = "127.0.0.1:24561"
+address = "127.0.0.1:{b}"
 mode = "server"
-"#;
-        let router = Router::from_str(toml).await.expect("should start");
+"#
+        );
+        let router = Router::from_str(&toml).await.expect("should start");
         let stats = router.endpoint_stats();
-        // Should have at least 2 entries for our 2 endpoints
         assert!(
             stats.len() >= 2,
             "expected at least 2 endpoint stats entries, got {}",
@@ -259,33 +280,25 @@ mode = "server"
 
     #[tokio::test]
     async fn test_router_is_running() {
-        let toml = r#"
-[[endpoint]]
-type = "udp"
-address = "127.0.0.1:24562"
-mode = "server"
-"#;
-        let router = Router::from_str(toml).await.expect("should start");
+        let port = claim_udp_port();
+        let router = Router::from_str(&udp_server_toml(port))
+            .await
+            .expect("should start");
         assert!(router.is_running(), "router should be running after start");
 
-        // Obtain a token clone before stopping
         let token = router.cancel_token();
         assert!(!token.is_cancelled());
 
         router.stop().await;
-        // After stop, the token should be cancelled
         assert!(token.is_cancelled());
     }
 
     #[tokio::test]
     async fn test_router_routing_table_access() {
-        let toml = r#"
-[[endpoint]]
-type = "udp"
-address = "127.0.0.1:24552"
-mode = "server"
-"#;
-        let router = Router::from_str(toml).await.expect("should start");
+        let port = claim_udp_port();
+        let router = Router::from_str(&udp_server_toml(port))
+            .await
+            .expect("should start");
         let stats = router.routing_table().stats();
         assert_eq!(stats.total_systems, 0);
         router.stop().await;
