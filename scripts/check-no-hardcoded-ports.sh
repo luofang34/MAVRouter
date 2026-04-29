@@ -37,14 +37,34 @@ cd "$PROJECT_ROOT"
 # [1-9] (so `:0` and template `{…}` don't match).
 pattern='(127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|\[::\])([:]|["'"'"']\s*,\s*)[1-9][0-9]*'
 
-# Rust scope: top-level integration tests only. These are the files
-# that actually bind sockets against the tokio runtime — unit tests
-# under src/ either (a) use port literals as TOML/SocketAddr *fixture
-# data* for parser assertions (src/config/tests/*.rs) or (b) already
-# bind on `:0` (src/endpoints/udp/tests.rs). Production code is out
-# of scope — example configs legitimately reference well-known
-# defaults like 14550/5760.
-rust_hits=$(grep -REn --include='*.rs' "$pattern" tests || true)
+# Rust scope: integration tests under tests/ AND unit tests under
+# src/. Comment lines (//, ///, //!) are stripped before matching so
+# doc examples like `//! address = "127.0.0.1:5761"` don't trigger.
+#
+# Some unit tests under src/ legitimately use port literals as fixture
+# data — the literal never reaches a `bind()` / `connect()`, only a
+# `parse::<SocketAddr>()` round-trip or a TOML deserializer assertion.
+# Those paths are excluded explicitly:
+#
+#   src/config/tests/         — TOML parser / serde validation fixtures
+#                               (no Router started, no socket bound).
+#   src/endpoints/udp/tests.rs — `is_broadcast_addr` / `client_bind_addr`
+#                               unit tests; `SocketAddr::parse` only,
+#                               followed by predicate checks.
+#   src/error.rs              — error-message Display formatting tests;
+#                               port literal is just a string the error
+#                               carries through `to_string()`.
+#
+# Anywhere else under src/ that parses a TOML config and feeds it to
+# `Router::from_str` / `Router::start` IS in scope — those bind real
+# sockets and must use ephemeral ports (claim helper pattern from the
+# integration tests).
+rust_hits=$(grep -REn --include='*.rs' "$pattern" tests src \
+    | grep -vE ':[[:space:]]*//' \
+    | grep -vE '^src/config/tests/' \
+    | grep -vE '^src/endpoints/udp/tests\.rs:' \
+    | grep -vE '^src/error\.rs:' \
+    || true)
 
 # Python scope: tests/integration/*.py. Every client-only script
 # reads ports from MAVROUTER_TCP_PORT / MAVROUTER_UDP_PORT env vars

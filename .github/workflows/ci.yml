@@ -70,6 +70,16 @@ jobs:
       # if any hard-coded non-zero port literal reappears in tests/*.rs.
       - name: No hard-coded test ports
         run: scripts/check-no-hardcoded-ports.sh
+      - name: No stray duplicate files (Finder-style "* 2.*")
+        run: |
+          set -euo pipefail
+          offenders=$(find . -type f -name '* [0-9].*' -not -path './target/*' -not -path './.git/*')
+          if [ -n "$offenders" ]; then
+              echo "Stray Finder-style duplicate files committed:"
+              echo "$offenders"
+              echo "Delete these (\\rm to bypass any rm -i alias) before merging."
+              exit 1
+          fi
 
   test-release:
     name: Test (Release)
