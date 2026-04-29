@@ -11,7 +11,7 @@ documentation = "https://docs.rs/mavrouter"
 readme = "README.md"
 keywords = ["mavlink", "router", "telemetry", "uav", "embedded"]
 categories = ["network-programming", "embedded", "aerospace"]
-rust-version = "1.75"
+rust-version = "1.81"
 
 [lib]
 name = "mavrouter"
