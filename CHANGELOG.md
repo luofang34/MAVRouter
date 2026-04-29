@@ -21,6 +21,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI `await_holding_lock = "deny"`, `let_underscore_must_use = "deny"`,
   `let_underscore_future = "deny"`, and a `disallowed_types` entry forbidding
   `anyhow::Error` in crate code.
+- `cargo audit` workflow gating every PR plus a Monday cron, so RustSec
+  advisories on the dep tree surface as a CI red light instead of after
+  release.
+- MSRV verification job pinned to 1.75 — `cargo check --all-targets
+  --locked` against the declared `rust-version`.
+- crates.io trusted-publishing release pipeline (`.github/workflows/
+  publish.yml`): OIDC token exchange (no stored `CARGO_REGISTRY_TOKEN`),
+  tag-version match check, `workflow_dispatch` dry-run that exercises
+  the full OIDC path before a real tag is cut.
+- Dependabot weekly grouped PRs for the `github-actions` ecosystem.
+- CI guardrail against stray Finder-style `* N.*` duplicate files.
+- `pipeline_benchmark`: end-to-end criterion bench covering ingress
+  parsing, routing-table lookup, and broadcast fan-out under contention.
+- Test-only `RunEvent` enum and `SignalSource` trait (extracted reload
+  loop in `src/run_loop.rs`) so SIGHUP-reload semantics are unit-testable
+  without forking the binary.
+- Shared Python test helpers (`tests/integration/_test_helpers.py`):
+  bounded `wait_for_tcp` / `drain_recv_match` / `collect_until` —
+  every blocking op now has a wall-clock deadline so a wedged router
+  fails fast instead of hanging until the CI job timeout.
 
 ### Changed
 - Narrowed the public API down to `Router`, `config::*`, `error::*`, and the
@@ -33,6 +53,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `config.rs` split into per-concern submodules (`general`, `endpoint`,
   `defaults`, `merge`, `validate`, plus a tests subtree). No file in the
   crate exceeds the 500-line budget.
+- **MSRV bumped 1.70 → 1.75** to enable async-fn-in-trait for the extracted
+  `SignalSource` seam.
+- `routing.rs` God-Module split into per-concern submodules (`table`,
+  `shard`, `groups`, `stats`, `update`). The hot egress path now snapshots
+  the group config lock-free via `ArcSwap` and never holds two locks
+  simultaneously, eliminating an inverted-ordering deadlock against
+  `is_sniffer_endpoint`.
+- `endpoints/` ingress pipeline split into named stages (filter / dedup /
+  observe / publish) and the per-protocol spawn API unified.
+- `endpoint_core.rs`: `EndpointStats`, `EndpointStatsSnapshot`, and
+  `ExponentialBackoff` extracted into `endpoint_core/{stats,backoff}.rs`;
+  `tests.rs` partitioned into per-concern submodules (`backoff`, `stats`,
+  `timestamp`, `incoming`, `outgoing`, `loopback`, `lagged`, `helpers`).
+- `main.rs` reload loop extracted into `run_loop::run_with_signals` behind
+  a `SignalSource` trait. `main.rs` shrinks from ~290 to ~60 lines.
+- `RouterError` thickened to preserve TOML span/line context through the
+  config-parse error chain.
+- Stats Reporter and Stats Socket spawn moved from `main.rs` into
+  `orchestration` so the binary stays focused on signal wiring.
+- Integration tests (`integration_test.rs`, `smart_routing_test.rs`,
+  `network_test.rs`) replace blind `tokio::time::sleep` with event-sync
+  primitives: `wait_for_bus_subscribers` (polls broadcast receiver count),
+  `connect_tcp_with_retry` (closes the bind/release race), and
+  `wait_for_routing_systems` (polls `RoutingTable::stats`).
+- Hard-coded test ports replaced with ephemeral `127.0.0.1:0` reservations
+  across the Rust integration tests, the Python integration suite, and
+  unit tests inside `src/`. The `check-no-hardcoded-ports.sh` guardrail
+  now scans `src/` too (with explicit fixture-file allowlists).
+- `let _ = ...` silent-error sites across TCP accept / stats socket
+  cleanup / shutdown timeout / bench infrastructure either handle the
+  error explicitly or surface it through `.ok()` / `.inspect_err`.
+- `Router::stop`: dropped a 500ms pre-shutdown sleep that was a workaround
+  for a now-fixed race.
+- Endpoint supervisor: `tokio_serial::SerialStream::open_native_async`
+  is bounded by a 3s timeout so a stuck device file can't hang the
+  supervisor restart loop indefinitely.
+- Bus broadcast `RecvError::Lagged(n)`: counted into `EndpointStats::
+  bus_lagged`, surfaced in stats snapshots, and logged at `error!` for
+  the UDP sender and TLog logger paths.
+- All Node-based GitHub Actions on Node 24 runtime: `actions/checkout`
+  v4 → v6, `actions/setup-python` v5 → v6, `actions/upload-artifact`
+  v4 → v7, `codecov/codecov-action` v5 → v6.
+- Test reliability: dropped all `#[serial]` attributes (replaced by
+  ephemeral-port discipline) and removed `serial_test` as a dev-dep.
 
 ### Removed
 - `From<anyhow::Error> for RouterError` and the unused `Internal(String)`
@@ -49,6 +113,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `let _ = …` silent-error sites across TCP accept / stats socket cleanup /
   shutdown timeout. Each site now either handles the error explicitly or
   surfaces it through `.ok()` / `.inspect_err`.
+- Routing hot egress path: previously could hold a shard read lock and
+  the group-config lock simultaneously, with inverted ordering against
+  `is_sniffer_endpoint`. Refactored to snapshot config first
+  (lock-free), then take at most one shard lock.
+
+### Security
+- **RUSTSEC-2026-0007** (`bytes` `BytesMut::reserve` integer overflow):
+  `Cargo.lock` bumped to `bytes 1.11.1`.
+- **RUSTSEC-2017-0008** (`serial` crate unmaintained): allowlisted in
+  `.cargo/audit.toml` with rationale. The unmaintained `serial 0.4.0`
+  reaches the lockfile only as a transitive dep of `mavlink 0.12`;
+  mavrouter uses `tokio-serial` for actual serial I/O, so the
+  unmaintained crate is not on any code path we exercise.
 
 ## [0.1.5] — 2026-02-09
 
