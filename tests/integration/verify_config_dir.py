@@ -19,25 +19,15 @@ import socket
 
 from pymavlink import mavutil
 
-# Resolve binary path relative to this script (repo_root/target/release/mavrouter)
+# Path massaging so `from _test_helpers import ...` works whether this
+# script is launched from `tests/integration/` or from the repo root.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+from _test_helpers import wait_for_tcp  # noqa: E402
+
 REPO_ROOT = os.path.join(SCRIPT_DIR, '..', '..')
 BINARY = os.path.join(REPO_ROOT, 'target', 'release', 'mavrouter')
-
-
-def wait_for_tcp(host, port, timeout=10):
-    """Wait for TCP port to become available"""
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            sock.connect((host, port))
-            sock.close()
-            return True
-        except (socket.error, socket.timeout):
-            time.sleep(0.5)
-    return False
 
 
 def claim_tcp_port():

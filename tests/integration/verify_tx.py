@@ -3,6 +3,11 @@ import sys
 import time
 from pymavlink import mavutil
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+from _test_helpers import drain_recv_match  # noqa: E402
+
 # CI sets MAVROUTER_TCP_PORT to an ephemeral port it claimed before
 # starting the router; fall back to 5760 for local runs.
 TCP_PORT = int(os.environ.get('MAVROUTER_TCP_PORT', 5760))
@@ -26,9 +31,8 @@ def main():
         print("Invalid SysID 0")
         sys.exit(1)
 
-    # 1. Clear buffer
-    while master.recv_match(blocking=False):
-        pass
+    # 1. Clear buffer — bounded so a stuck broadcast fails the test fast.
+    drain_recv_match(master, deadline_s=2.0)
 
     # 2. Send Command
     target_comp = src_comp

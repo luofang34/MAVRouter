@@ -22,6 +22,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.join(SCRIPT_DIR, '..', '..')
 BINARY = os.path.join(REPO_ROOT, 'target', 'release', 'mavrouter')
 
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+from _test_helpers import drain_recv_match  # noqa: E402
+
 from pymavlink import mavutil
 
 
@@ -133,9 +137,9 @@ block_msg_id_out = [0]
         )
         time.sleep(0.5)
 
-        # Drain any pending messages on GCS
-        while gcs.recv_match(blocking=False):
-            pass
+        # Drain any pending messages on GCS — wall-clock-bounded so a
+        # router stuck broadcasting fails the test fast.
+        drain_recv_match(gcs, deadline_s=2.0)
 
         # Test filtering: send HEARTBEATs and PINGs from autopilot
         print("\n[5/6] Testing message filtering...")
@@ -203,9 +207,8 @@ block_msg_id_out = [0]
         )
         time.sleep(0.5)
 
-        # Drain
-        while observer.recv_match(blocking=False):
-            pass
+        # Drain — bounded so a stuck broadcast surfaces as a clear failure.
+        drain_recv_match(observer, deadline_s=2.0)
 
         # Send the same PING rapidly from autopilot (should be deduped)
         # Note: dedup works on raw bytes, so identical messages within 500ms window are dropped

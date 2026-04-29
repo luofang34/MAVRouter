@@ -23,6 +23,11 @@ import signal
 
 from pymavlink import mavutil
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+from _test_helpers import wait_for_tcp  # noqa: E402
+
 
 def find_router_pid():
     """Find mavrouter process ID"""
@@ -39,22 +44,6 @@ def find_router_pid():
     except Exception:
         pass
     return None
-
-
-def wait_for_tcp(host, port, timeout=10):
-    """Wait for TCP port to become available"""
-    import socket
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            sock.connect((host, port))
-            sock.close()
-            return True
-        except (socket.error, socket.timeout):
-            time.sleep(0.5)
-    return False
 
 
 def claim_tcp_port():
