@@ -1,0 +1,14 @@
+# cargo-audit policy. Each ignore needs a `# Why:` line documenting
+# (a) what makes the advisory inapplicable to us today, and (b) what
+# would have to change for the entry to be removable.
+
+[advisories]
+ignore = [
+    # serial 0.4.0 is unmaintained. Reaches us only as a transitive dep of
+    # `mavlink 0.12`, which still bundles the `direct` feature on its
+    # serial-port wrapper. mavrouter itself uses `tokio-serial` for actual
+    # serial I/O — `serial` is not on any code path we exercise.
+    # Why: not on a code path we exercise; cannot remove without an
+    # upstream mavlink release that drops the `serial` dep.
+    "RUSTSEC-2017-0008",
+]
