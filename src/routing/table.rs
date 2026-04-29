@@ -11,12 +11,11 @@
 //!
 //! The hot egress path ([`RoutingTable::should_send`]) MUST NOT hold two
 //! synchronisation primitives simultaneously, and MUST NOT hold the
-//! group-config across a shard acquisition — the old code did both, which
-//! (a) risked parking a tokio worker behind the single global
-//! `RwLock<GroupConfig>` under contention and (b) introduced an inverted
-//! lock ordering against [`RoutingTable::is_sniffer_endpoint`] that would
-//! have latched into a deadlock the moment group-config became contended.
-//! The discipline we enforce now:
+//! group-config across a shard acquisition — doing either would (a) risk
+//! parking a tokio worker behind the single global `RwLock<GroupConfig>`
+//! under contention and (b) invert lock ordering against
+//! [`RoutingTable::is_sniffer_endpoint`], which could latch into a
+//! deadlock the moment group-config becomes contended. The discipline:
 //!
 //! 1. **Snapshot** the group config first with `ArcSwap::load` — lock-free.
 //! 2. **Then** acquire at most one shard read lock and do all shard work.
