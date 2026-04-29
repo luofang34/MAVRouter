@@ -1,0 +1,32 @@
+name: Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday 06:00 UTC. New advisories that land between commits
+    # surface here without waiting for the next code change.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # If a CVE legitimately can't be addressed (e.g. unfixed transient
+      # dep), allowlist it via `.cargo/audit.toml` with a `# Why:` line
+      # — keep the surface explicit rather than relaxing this gate.
+      - run: cargo audit
