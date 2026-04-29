@@ -5,6 +5,11 @@ import asyncio
 import socket
 import argparse
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+from _test_helpers import wait_for_tcp  # noqa: E402
+
 # --- Dependency Check ---
 try:
     from pymavlink.dialects.v20 import common as mavlink2
@@ -61,14 +66,12 @@ def prebuild_ping_frames(system_id, component_id=1):
 
 
 def wait_for_port(ip, port, timeout=10):
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            with socket.create_connection((ip, port), timeout=1):
-                print(f"Port {port} is open.")
-                return True
-        except (ConnectionRefusedError, OSError):
-            time.sleep(0.1)
+    """Compatibility wrapper around `_test_helpers.wait_for_tcp` — kept so
+    the existing call sites can stay terse, while the implementation lives
+    in one place and matches the rest of the suite."""
+    if wait_for_tcp(ip, port, timeout):
+        print(f"Port {port} is open.")
+        return True
     print(f"Timeout waiting for port {port}.")
     return False
 
