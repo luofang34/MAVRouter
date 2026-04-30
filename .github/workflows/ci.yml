@@ -149,6 +149,12 @@ jobs:
       - name: Check markdown links
         uses: lycheeverse/lychee-action@v2
         with:
+          # `--exclude 'github\.com/.*/compare/v'` skips the version-diff URLs
+          # CHANGELOG.md ships at the bottom of every release section. Those
+          # always 404 in the release PR's CI run because the new tag doesn't
+          # exist yet — the link only resolves once the tag has been pushed.
+          # The URL pattern is fixed so the exclude can't hide a genuinely
+          # broken link, just the inherent one-tag-of-lag.
           args: >-
             --verbose
             --no-progress
@@ -156,6 +162,7 @@ jobs:
             --max-retries 5
             --retry-wait-time 3
             --accept 200..=299,429,500..=504
+            --exclude 'github\.com/.*/compare/v'
             './**/*.md'
           fail: true
 
