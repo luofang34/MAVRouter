@@ -19,6 +19,22 @@ jobs:
       - name: Cargo Check
         run: cargo check --verbose
 
+  msrv:
+    # The crate declares `rust-version = "1.82"` in Cargo.toml. Without a
+    # toolchain pinned to that version, any post-1.82 stabilization could
+    # land silently and break users on the declared MSRV. `cargo check`
+    # (not test) is the right gate — MSRV is about the surface compiling,
+    # not about runtime behaviour. `--locked` ensures the check uses the
+    # same Cargo.lock the rest of CI does, so a dep update that needs a
+    # newer rustc cannot silently raise the effective MSRV between
+    # commits without this job turning red.
+    name: MSRV (1.82)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.82
+      - run: cargo check --all-targets --locked
+
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
