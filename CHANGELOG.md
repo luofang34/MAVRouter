@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cargo audit` workflow gating every PR plus a Monday cron, so RustSec
   advisories on the dep tree surface as a CI red light instead of after
   release.
-- MSRV verification job pinned to 1.75 — `cargo check --all-targets
+- MSRV verification job pinned to 1.85 — `cargo check --all-targets
   --locked` against the declared `rust-version`.
 - crates.io trusted-publishing release pipeline (`.github/workflows/
   publish.yml`): OIDC token exchange (no stored `CARGO_REGISTRY_TOKEN`),
@@ -53,11 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `config.rs` split into per-concern submodules (`general`, `endpoint`,
   `defaults`, `merge`, `validate`, plus a tests subtree). No file in the
   crate exceeds the 500-line budget.
-- **MSRV bumped 1.70 → 1.81.** Initial bump was to 1.75 (async-fn-in-trait
-  for the extracted `SignalSource` seam); refined to 1.81 to match the
-  committed `Cargo.lock`'s v4 format, which 1.75's cargo cannot read. The
-  MSRV verification job (`cargo check --all-targets --locked` on
-  `dtolnay/rust-toolchain@1.81`) gates the floor on every PR.
+- **MSRV bumped 1.70 → 1.85.** Stepped up as new floors surfaced from the
+  fresh MSRV CI gate: 1.75 for async-fn-in-trait (extracted `SignalSource`
+  seam), 1.81 for `Cargo.lock` v4 format, 1.82 for `indexmap 2.12`, 1.85
+  for `indexmap 2.14`'s `edition2024` requirement. The MSRV verification
+  job (`cargo check --all-targets --locked` on
+  `dtolnay/rust-toolchain@1.85`) gates the floor on every PR.
 - `routing.rs` God-Module split into per-concern submodules (`table`,
   `shard`, `groups`, `stats`, `update`). The hot egress path now snapshots
   the group config lock-free via `ArcSwap` and never holds two locks
