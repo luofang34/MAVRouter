@@ -159,7 +159,7 @@ pub async fn run(
                                 let mut peer = broadcast_peer_recv.lock();
                                 let is_new = peer
                                     .as_ref()
-                                    .map_or(true, |(prev_addr, _)| *prev_addr != addr);
+                                    .is_none_or(|(prev_addr, _)| *prev_addr != addr);
                                 if is_new {
                                     info!(
                                         "UDP broadcast endpoint: switching to unicast peer {}",
