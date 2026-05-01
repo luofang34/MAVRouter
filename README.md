@@ -1,6 +1,6 @@
 # MAVRouter
 
-[![CI](https://github.com/luofang34/mavrouter/workflows/CI/badge.svg)](https://github.com/luofang34/mavrouter/actions)
+[![CI](https://github.com/luofang34/MAVRouter/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/luofang34/MAVRouter/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/luofang34/mavrouter/branch/main/graph/badge.svg)](https://codecov.io/gh/luofang34/mavrouter)
 [![crates.io](https://img.shields.io/crates/v/mavrouter.svg)](https://crates.io/crates/mavrouter)
 [![docs.rs](https://docs.rs/mavrouter/badge.svg)](https://docs.rs/mavrouter)

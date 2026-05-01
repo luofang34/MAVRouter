@@ -17,3 +17,10 @@ updates:
       actions:
         patterns:
           - "*"
+    ignore:
+      # `dtolnay/rust-toolchain` uses its `@1.X` ref to pin a Rust
+      # toolchain version, not an action version. Dependabot reads the
+      # ref as a semver tag and tries to "upgrade" 1.85 -> 1.100, which
+      # then asks rustup for Rust 1.100 (doesn't exist) and breaks the
+      # MSRV job. Pin manually instead.
+      - dependency-name: "dtolnay/rust-toolchain"
